@@ -41,7 +41,8 @@ class WechatOfficialAccountDistributor(BaseDistributor):
                 'fenced_code',  # 代码块
                 'tables',       # 表格
                 'nl2br'         # 换行转 <br>
-            ]
+            ],
+            safe_mode=True
         )
         
         thumb_media_id = await self._upload_image(content.get("cover_image", ""))

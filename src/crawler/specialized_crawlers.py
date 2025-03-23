@@ -155,10 +155,10 @@ class ArxivCrawler(WebCrawler):
         Returns:
             Optional[str]: HTML内容
         """
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, self.crawler_fetch_url_max_retries + 1):
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=self.headers, timeout=timeout) as response:
+                    async with session.get(url, headers=self.headers, timeout=self.crawler_fetch_url_timeout) as response:
                         if response.status == 200:
                             return await response.text()
                         elif response.status == 429:  # 被限流
@@ -167,25 +167,25 @@ class ArxivCrawler(WebCrawler):
                             logger.error(f"HTTP错误 {response.status}: {url}")
                             
                 # 只有非成功响应才会执行到这里
-                if attempt < max_retries:
-                    wait_time = retry_delay * attempt
-                    logger.info(f"等待 {wait_time} 秒后进行第 {attempt+1}/{max_retries} 次重试...")
+                if attempt < self.crawler_fetch_url_max_retries:
+                    wait_time = self.crawler_fetch_url_retry_delay * attempt
+                    logger.info(f"等待 {wait_time} 秒后进行第 {attempt+1}/{self.crawler_fetch_url_max_retries} 次重试...")
                     await asyncio.sleep(wait_time)
                     
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.error(f"获取URL出错 (尝试 {attempt}/{max_retries}): {url}, 错误: {str(e)}")
-                if attempt < max_retries:
-                    wait_time = retry_delay * attempt
+                logger.error(f"获取URL出错 (尝试 {attempt}/{self.crawler_fetch_url_max_retries}): {url}, 错误: {str(e)}")
+                if attempt < self.crawler_fetch_url_max_retries:
+                    wait_time = self.crawler_fetch_url_retry_delay * attempt
                     logger.info(f"等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.exception(f"获取URL时发生意外错误: {url}")
-                if attempt < max_retries:
-                    wait_time = retry_delay * attempt
+                if attempt < self.crawler_fetch_url_max_retries:
+                    wait_time = self.crawler_fetch_url_retry_delay * attempt
                     logger.info(f"等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)
         
-        logger.error(f"在{max_retries}次尝试后仍无法获取URL: {url}")
+        logger.error(f"在{self.crawler_fetch_url_max_retries}次尝试后仍无法获取URL: {url}")
         return None
 
 class GithubCrawler(WebCrawler):
@@ -246,7 +246,7 @@ class GithubCrawler(WebCrawler):
                         if repo_items:
                             logger.info(f"使用repo-list-item选择器找到 {len(repo_items)} 个项目")
                     except Exception as e:
-                        logger.error(f"repo-list-item选择器错误: {str(e)}", exc_info=True)
+                        logger.warning(f"repo-list-item选择器错误: {str(e)}")
                     
                     if not repo_items:
                         try:
@@ -254,7 +254,7 @@ class GithubCrawler(WebCrawler):
                             if repo_items:
                                 logger.info(f"使用Box-row选择器找到 {len(repo_items)} 个项目")
                         except Exception as e:
-                            logger.error(f"Box-row选择器错误: {str(e)}", exc_info=True)
+                            logger.warning(f"Box-row选择器错误: {str(e)}")
                     
                     if not repo_items:
                         try:
@@ -288,19 +288,85 @@ class GithubCrawler(WebCrawler):
                             count += 1
                             
                         except Exception as e:
-                            logger.error(f"解析GitHub仓库信息时出错 (项目 {idx}): {str(e)}", exc_info=True)
+                            logger.warning(f"解析GitHub仓库信息时出错 (项目 {idx}): {str(e)}")
                             continue
                     
                     if repo_urls:
                         return repo_urls
                         
                 except Exception as e:
-                    logger.error(f"解析GitHub HTML内容时出错: {str(e)}", exc_info=True)
+                    logger.warning(f"解析GitHub HTML内容时出错: {str(e)}")
                     continue
                     
             except Exception as e:
-                logger.error(f"GitHub搜索错误 ({search_url}): {str(e)}", exc_info=True)
+                logger.warning(f"GitHub搜索错误 ({search_url}): {str(e)}")
                 continue
-                
-        logger.warning(f"无法从GitHub获取仓库: {encoded_query}")
         return []
+
+class WeChatOfficialAccountCrawler(WebCrawler):
+    """
+    专用于微信公众号文章的爬虫
+    """
+    
+    def __init__(self):
+        """初始化微信公众号爬虫"""
+        super().__init__()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        }
+        # 微信文章选择器
+        self.selectors = {
+            'title': '#activity-name',
+            'author': '#js_name',
+            'date': '#publish_time',
+            'content': '#js_content',
+        }
+            
+    async def parse_sub_url(self, query: str) -> List[str]:
+        """
+        搜索微信公众号文章
+        
+        Args:
+            query: 搜索查询
+        Returns:
+            List[str]: 文章URL列表
+        """
+        logger.info(f"搜索微信公众号文章: {query}")
+        
+        # 搜狗微信搜索URL
+        search_url = f"https://weixin.sogou.com/weixin?type=2&query={quote(query)}"
+        
+        try:
+            html_content = await self.fetch_url(search_url)
+            if not html_content:
+                logger.error(f"无法获取微信搜索结果: {search_url}")
+                return []
+                
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # 提取搜索结果
+            results = []
+            articles = soup.select('.news-box .news-list li')
+            
+            for article in articles:
+                try:
+                    link_elem = article.select_one('h3 a')
+                    
+                    if link_elem:
+                        url = link_elem.get('href', '')
+                        # 对URL进行完整处理
+                        if url and not url.startswith('http'):
+                            url = urljoin('https://weixin.sogou.com/', url)
+                            
+                        results.append(url)
+                except Exception as e:
+                    logger.error(f"处理微信搜索结果项时出错: {str(e)}", exc_info=True)
+                    continue
+                    
+            return results
+            
+        except Exception as e:
+            logger.error(f"搜索微信公众号文章出错: {query}, 错误: {str(e)}", exc_info=True)
+            return []

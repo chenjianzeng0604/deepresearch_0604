@@ -2,12 +2,7 @@
 爬虫管理器模块，整合所有专用爬虫，提供统一的接口
 """
 from src.crawler.web_crawlers import WebCrawler
-from src.crawler.specialized_crawlers import ArxivCrawler, GithubCrawler
-from src.crawler.social_media_crawlers import (
-    WeChatOfficialAccountCrawler, 
-    WeiboCrawler, 
-    TwitterCrawler
-)
+from src.crawler.specialized_crawlers import ArxivCrawler, GithubCrawler, WeChatOfficialAccountCrawler
 from src.crawler.config import CrawlerConfig
 
 class CrawlerManager:
@@ -23,5 +18,3 @@ class CrawlerManager:
         self.github_crawler = GithubCrawler()
         self.web_crawler = WebCrawler()
         self.wechat_crawler = WeChatOfficialAccountCrawler()
-        self.weibo_crawler = WeiboCrawler()
-        self.twitter_crawler = TwitterCrawler()

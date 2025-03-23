@@ -4,33 +4,28 @@
 
 import logging
 import io
-import re
 import os
 import asyncio
-from typing import Dict, List, Any, Optional, Set, Tuple, List
-from urllib.parse import urlparse, urlunparse, urljoin, quote
+from typing import Dict, List, Any, Optional
+from urllib.parse import urlparse, urlunparse, urljoin
 from markdownify import markdownify as md
-import time
 import aiohttp
-from newspaper.urls import get_domain
-import requests
 
 import pdfplumber
+from pdfminer.layout import LAParams
 from bs4 import BeautifulSoup
-import random
 from fake_useragent import UserAgent
-from aiohttp import ClientSession, TCPConnector, ClientTimeout, ClientError
-from aiohttp_retry import RetryClient, ExponentialRetry
-from src.crawler import cloudflare_bypass
+from aiohttp import ClientSession
 from src.vectordb.milvus_dao import MilvusDao
 import uuid
-import ssl
-import hashlib
 from pymilvus import DataType
 from pymilvus import MilvusClient
-from requests.auth import HTTPProxyAuth
 from playwright.async_api import async_playwright
 from src.crawler.cloudflare_bypass import CloudflareBypass
+from src.utils.prompt_templates import PromptTemplates
+from src.models.config import AppConfig
+from src.utils.llm_client import LLMClient
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +35,8 @@ class WebCrawler:
     """
     
     def __init__(self):
-        self.milvus_dao = MilvusDao("deepresearch_collection_v2")
+        self.config = AppConfig.from_env()
+        self.milvus_dao = MilvusDao(os.getenv("DEEPRESEARCH_COLLECTION"))
         self.proxies = {
             "server": os.getenv("KDL_PROXIES_SERVER", ""),
             "username": os.getenv("KDL_PROXIES_USERNAME", ""),
@@ -54,7 +50,14 @@ class WebCrawler:
         self.crawler_extract_pdf_timeout = int(os.getenv("CRAWLER_EXTRACT_PDF_TIMEOUT", 30))
         self.crawler_max_links_result = int(os.getenv("CRAWLER_MAX_LINKS_RESULT", 10))
         self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 60))
-
+        self.crawler_fetch_article_with_semaphore = int(os.getenv("CRAWLER_FETCH_ARTICLE_WITH_SEMAPHORE", 10))
+        self.crawler_fetch_url_max_retries = int(os.getenv("CRAWLER_FETCH_URL_MAX_RETRIES", 2))
+        self.crawler_fetch_url_retry_delay = int(os.getenv("CRAWLER_FETCH_URL_RETRY_DELAY", 2))
+        self.llm_client = LLMClient(api_key=self.config.llm.api_key, 
+                                        model=self.config.llm.model, 
+                                        api_base=self.config.llm.api_base)
+        self.article_trunc_word_count = int(os.getenv("ARTICLE_TRUNC_WORD_COUNT", 10000))
+        
     def is_valid_url(self, url: str, base_domain: Optional[str] = None) -> bool:
         """
         检查URL是否有效且应该被爬取
@@ -113,55 +116,31 @@ class WebCrawler:
         Returns:
             Dict[str, Any]: 提取的内容
         """
-        result = {
-            'title': '',
-            'content': '',
-            'url': url,
-            'source_type': 'pdf_document',
-            'metadata': {}
-        }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=self.headers, timeout=self.crawler_extract_pdf_timeout) as response:
                     if response.status == 200:
                         pdf_content = await response.read()
-                        
                         with pdfplumber.open(io.BytesIO(pdf_content)) as pdf:
-                            # 提取元数据
-                            metadata = pdf.metadata
-                            if metadata:
-                                if 'Title' in metadata and metadata['Title']:
-                                    result['title'] = metadata['Title']
-                                    
-                                if 'Author' in metadata and metadata['Author']:
-                                    result['metadata']['author'] = metadata['Author']
-                                    
-                                if 'CreationDate' in metadata and metadata['CreationDate']:
-                                    result['metadata']['creation_date'] = metadata['CreationDate']
-                            
-                            # 提取文本内容
                             text_content = []
+                            laparams = LAParams(
+                                detect_vertical=True,  # 检测垂直文本
+                                all_texts=True,        # 提取所有文本层
+                                line_overlap=0.5,      # 行重叠阈值
+                                char_margin=2.0        # 字符间距阈值
+                            )
                             for page in pdf.pages:
-                                page_text = page.extract_text()
+                                page_text = page.extract_text(laparams=laparams)
                                 if page_text:
-                                    text_content.append(page_text)
-                            
+                                    text_content.append(
+                                        page_text.replace('\ufffd', '?')  # 替换非法字符
+                                    )
                             if text_content:
-                                result['content'] = '\n\n'.join(text_content)
-                                
-                                # 如果没有标题，尝试从第一页文本中提取
-                                if not result['title'] and len(text_content[0]) > 0:
-                                    # 获取第一行作为标题
-                                    first_line = text_content[0].split('\n')[0].strip()
-                                    if first_line and len(first_line) < 200:  # 确保标题不会太长
-                                        result['title'] = first_line
-                    else:
-                        logger.error(f"获取PDF失败: {url}, 状态码: {response.status}")
-                        
+                                return {'content': '\n\n'.join(text_content)}
         except Exception as e:
             logger.error(f"提取PDF内容出错: {url}, 错误: {str(e)}")
         
-        return result
+        return None
     
     async def extract_links(self, html: str, base_url: str) -> List[str]:
         """
@@ -185,22 +164,20 @@ class WebCrawler:
                     links.append(absolute_url)
         except Exception as e:
             logger.error(f"提取链接出错: {base_url}, 错误: {str(e)}")
-            
         return links
 
     async def parse_sub_url(self, search_url: str) -> List[str]:
         try:
             html_content = await self.fetch_url(search_url)
             if not html_content:
-                logger.error(f"无法获取搜索结果: {search_url}")
+                logger.error(f"主URL获取内容为空: {search_url}")
                 return []
-                
             return await self.extract_links(html_content, search_url)
         except Exception as e:
-            logger.error(f"搜索网站文章出错: {search_url}, 错误: {str(e)}")
+            logger.error(f"parse_sub_url出错: {search_url}, 错误: {str(e)}")
             return []
     
-    async def fetch_article_and_save2milvus(self, links: List[str]) -> List[str]:
+    async def fetch_article_and_save2milvus(self, query: str, links: List[str]) -> List[str]:
 
         url_list_str = ", ".join([f"'{url}'" for url in links])
         filter_expr = f"url in [{url_list_str}]"
@@ -215,16 +192,22 @@ class WebCrawler:
             existing_urls = set(r["url"] for r in res) if res else set()
             links = [link for link in links if link not in existing_urls]
 
-        successful_articles = 0
-        
-        sem = asyncio.Semaphore(3)
-        
+        rows = 0
+        sem = asyncio.Semaphore(self.crawler_fetch_article_with_semaphore)
         async def fetch_article_with_semaphore(link):
             async with sem:
                 if self.is_pdf_url(link):
-                    return await self.extract_pdf(link)
+                    content = await self.extract_pdf(link)
+                    content = await self._generate_summary(query, content)
+                    if not content or len(content.strip()) == 0:
+                        content = ""
+                    return {"url": link, "content": content}
                 else:
-                    return {"url": link, "content": await self.fetch_url_md(link)}
+                    content = await self.fetch_url_md(link)
+                    content = await self._generate_summary(query, content)
+                    if not content or len(content.strip()) == 0:
+                        content = ""
+                    return {"url": link, "content": content}
         
         tasks = [fetch_article_with_semaphore(link) for link in links[:self.crawler_max_links_result]]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -234,17 +217,7 @@ class WebCrawler:
                 logger.error(f"获取文章信息时发生错误: {str(result)}")
                 continue
                 
-            if isinstance(result, dict) and 'content' in result and result['content'] and len(result['content'].strip()) > 0 and 'url' in result:
-                content = result['content'].strip()
-                if len(content) > 10000:
-                    content = content[:10000]
-                content_embs = self.milvus_dao._generate_embeddings([content])
-                data = [{
-                    "id": str(uuid.uuid4()),
-                    "url": result['url'],
-                    "content": content,
-                    "content_emb": content_embs[0]
-                }]
+            if len(result['content'].strip()) > 0:
                 schema = MilvusClient.create_schema(
                     auto_id=False,
                     enable_dynamic_field=True,
@@ -252,6 +225,7 @@ class WebCrawler:
                 schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=36)
                 schema.add_field("url", DataType.VARCHAR, max_length=500)
                 schema.add_field("content", DataType.VARCHAR, max_length=65535)
+                schema.add_field("create_time", DataType.INT64)
                 schema.add_field("content_emb", DataType.FLOAT_VECTOR, dim=1024)
 
                 index_params = MilvusClient.prepare_index_params()
@@ -262,12 +236,44 @@ class WebCrawler:
                     metric_type="COSINE",
                     params={"M": 8, "efConstruction": 200}
                 )
-
-                self.milvus_dao._store_in_milvus(self.milvus_dao.collection_name, schema, index_params, data)
-                successful_articles += 1
+                contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
+                for content in contents:
+                    content_embs = self.milvus_dao._generate_embeddings([content])
+                    data = [{
+                        "id": str(uuid.uuid4()),
+                        "url": result['url'],
+                        "content": content,
+                        "content_emb": content_embs[0],
+                        "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
+                    }]
+                    self.milvus_dao._store_in_milvus(self.milvus_dao.collection_name, schema, index_params, data)
+                    rows += 1
         
-        logger.info(f"成功获取{successful_articles}/{len(links)}篇文章的详细信息")
+        logger.info(f"成功写入{rows}行数据")
         return results
+
+    def cut_string_by_length(self, s, length):
+        """
+        将字符串按固定长度切割成数组
+
+        :param s: 需要切割的字符串
+        :param length: 每个子字符串的固定长度
+        :return: 切割后的子字符串数组
+        """
+        return [s[i:i+length] for i in range(0, len(s), length)]
+
+
+    async def _generate_summary(self, query: str, content: str) -> str:
+        if not content or len(content.strip()) == 0:
+            return ""
+        try:
+            summary_analysis_prompt = PromptTemplates.format_summary_analysis_prompt(query, content)
+            summary = await self.llm_client.generate(summary_analysis_prompt)
+            logger.info(f"生成摘要: {summary}")
+            return summary
+        except Exception as e:
+            logger.error(f"生成摘要时出错: {str(e)}", exc_info=True)
+            return ""
     
     def is_pdf_url(self, url: str) -> bool:
         return '/pdf/' in url
@@ -389,8 +395,19 @@ class WebCrawler:
                 )
 
                 cloudflare_bypass = CloudflareBypass(page)
-                await cloudflare_bypass.simulate_human_interaction()
-                return await cloudflare_bypass.handle_cloudflare()   
+                try:
+                    # 先尝试模拟人类交互
+                    await cloudflare_bypass.simulate_human_interaction()
+                    # 然后处理Cloudflare挑战
+                    return await cloudflare_bypass.handle_cloudflare()
+                except Exception as e:
+                    logger.warning(f"Cloudflare绕过过程中出错: {str(e)}")
+                    # 即使出错也尝试获取页面内容
+                    try:
+                        return await page.content()
+                    except Exception as content_error:
+                        logger.error(f"获取页面内容失败: {str(content_error)}")
+                        return None
             finally:
                 await context.close()
                 await browser.close()

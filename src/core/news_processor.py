@@ -68,10 +68,7 @@ class NewsProcessor:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Create the agent - 使用DeepresearchAgent
-            agent = DeepresearchAgent(session_id=session_id, config=self.config)
-            
-            # Process using the streaming interface
+            agent = DeepresearchAgent(session_id=session_id)
             message = ChatMessage(
                 message=topic,
                 metadata={"platforms": include_platforms}

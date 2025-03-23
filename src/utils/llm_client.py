@@ -6,6 +6,8 @@ import time
 import asyncio
 import openai
 
+from src.utils.prompt_templates import PromptTemplates
+
 logger = logging.getLogger(__name__)
 
 class LLMClient:
@@ -77,6 +79,9 @@ class LLMClient:
         messages = []
         if system_message:
             messages.append({"role": "system", "content": system_message})
+        else:
+            # 使用默认系统消息
+            messages.append({"role": "system", "content": PromptTemplates.get_system_message()})
         
         # 添加用户消息
         messages.append({"role": "user", "content": prompt})
@@ -164,7 +169,7 @@ class LLMClient:
         
         # 在系统消息中添加JSON输出指令
         json_system_message = system_message or ""
-        json_system_message += "\nYou must respond with a valid JSON object that conforms to the provided schema."
+        json_system_message += PromptTemplates.get_system_message(for_json=True)
         
         try:
             # 调用LLM生成
@@ -208,31 +213,25 @@ class LLMClient:
                 
                 # 解析JSON
                 try:
-                    result = json.loads(json_str)
-                    return result
+                    return json.loads(json_str)
                 except json.JSONDecodeError as e:
-                    logger.error(f"解析JSON响应时出错: {e}\nJSON字符串: {json_str}", exc_info=True)
+                    logger.error(f"解析JSON响应时出错: {e}\nJSON字符串: {json_str}")
                     raise
             else:
                 # 标准OpenAI调用
-                response = await self.generate(prompt, max_tokens, temperature, system_message, tools)
+                response = await self.generate(prompt, max_tokens, temperature, tools, json_system_message)
                 
-                # 如果是工具调用的响应
-                if hasattr(response, 'choices') and response.choices[0].message.tool_calls:
-                    json_str = response.choices[0].message.tool_calls[0].function.arguments
-                    return json.loads(json_str)
-                else:
-                    # 尝试直接解析响应
-                    try:
-                        return json.loads(response)
-                    except:
-                        return {"error": "无法解析JSON输出", "raw_response": response}
-        
+                # 尝试解析JSON响应
+                try:
+                    return json.loads(response)
+                except json.JSONDecodeError as e:
+                    logger.error(f"解析JSON响应时出错: {e}\nJSON字符串: {response}")
+                    raise
         except Exception as e:
-            logger.error(f"生成JSON输出时出错: {e}", exc_info=True)
-            return {"error": str(e)}
-
-    async def generate_with_streaming(self, prompt: str, 
+            logger.error(f"生成JSON响应时出错: {e}", exc_info=True)
+            raise
+    
+    async def generate_with_streaming(self, prompt: str,
                                     max_tokens: Optional[int] = None,
                                     temperature: Optional[float] = None,
                                     system_message: Optional[str] = None) -> AsyncGenerator[str, None]:
@@ -241,121 +240,48 @@ class LLMClient:
         
         Args:
             prompt: 提示词
-            max_tokens: 最大生成长度，None表示使用默认值
-            temperature: 温度参数，None表示使用默认值
+            max_tokens: 最大生成长度
+            temperature: 温度
             system_message: 系统消息
             
         Returns:
-            AsyncGenerator[str, None]: 文本流
-        """                
-        # 设置参数默认值
-        max_tokens = max_tokens or self.max_tokens
-        temperature = temperature or self.temperature
-        system_message = system_message or "You are a helpful assistant."
+            AsyncGenerator[str, None]: 生成的文本流
+        """
+        # 使用默认系统消息
+        if not system_message:
+            system_message = PromptTemplates.get_system_message()
         
-        # 最大重试次数
-        max_retries = 3
-        retry_count = 0
-        retry_delay = 1  # 初始延迟1秒
+        # 准备消息
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
         
-        while retry_count < max_retries:
+        # 参数设置
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "stream": True
+        }
+        
+        try:
+            # 调用API并处理流式响应
+            stream_resp = openai.chat.completions.create(**params)
+            
+            for chunk in stream_resp:
+                if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    yield content
+        except Exception as e:
+            logger.error(f"流式生成文本时出错: {e}", exc_info=True)
+            
+            # 出错时尝试使用非流式方式生成
             try:
-                logger.info(f"开始流式生成文本 (尝试 {retry_count + 1}/{max_retries})")
-                
-                # 真实的OpenAI API调用
-                messages = [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt}
-                ]
-                
-                # 创建流式响应 - 不需要 await
-                response = openai.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stream=True
-                )
-                
-                # 流式处理响应
-                collected_chunks = []
-                collected_messages = ""
-                
-                # 处理每个流式事件
-                try:
-                    for chunk in response:
-                        collected_chunks.append(chunk)  # 保存响应块以便调试
-                        
-                        # 防御性编程: 检查所有可能的属性
-                        chunk_message = None
-                        if hasattr(chunk, 'choices') and len(chunk.choices) > 0:
-                            if hasattr(chunk.choices[0], 'delta'):
-                                if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
-                                    chunk_message = chunk.choices[0].delta.content
-                        
-                        if chunk_message is not None:
-                            collected_messages += chunk_message
-                            logger.debug(f"收到第 {len(collected_chunks)} 个响应块: '{chunk_message}' 累计长度: {len(collected_messages)}")
-                            yield chunk_message
-                        else:
-                            logger.debug(f"收到第 {len(collected_chunks)} 个空内容响应块")
-                    
-                    # 如果能走到这里，说明成功完成了流式生成
-                    logger.info(f"流式响应完成，总共收到 {len(collected_chunks)} 个块，总响应长度: {len(collected_messages)}")
-                    return  # 成功完成，退出函数
-                    
-                except openai.APIError as api_error:
-                    # 特别处理API错误
-                    if "500" in str(api_error) and "InternalError" in str(api_error):
-                        logger.error(f"遇到OpenAI服务器内部错误 (尝试 {retry_count + 1}/{max_retries}): {str(api_error)}")
-                        # 准备重试
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            logger.info(f"等待 {retry_delay} 秒后重试...")
-                            await asyncio.sleep(retry_delay)
-                            retry_delay *= 2  # 指数退避
-                            continue
-                        else:
-                            # 使用备选方法
-                            logger.warning("达到最大重试次数，尝试使用非流式生成")
-                            try:
-                                # 尝试非流式生成文本
-                                non_streaming_response = await self.generate(prompt, max_tokens, temperature, system_message)
-                                yield "由于流式生成出错，切换为一次性响应：\n\n"
-                                yield non_streaming_response
-                                return
-                            except Exception as backup_error:
-                                logger.error(f"备选方法也失败: {str(backup_error)}")
-                                yield f"无法生成响应。服务器可能暂时不可用，请稍后再试。错误详情: {str(api_error)}"
-                                return
-                    else:
-                        # 其他API错误
-                        raise
-                        
-            except Exception as e:
-                error_message = f"流式生成文本时出错: {str(e)}"
-                logger.error(error_message, exc_info=True)
-                
-                # 增加重试逻辑
-                retry_count += 1
-                if retry_count < max_retries:
-                    logger.info(f"等待 {retry_delay} 秒后重试...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2  # 指数退避
-                else:
-                    # 所有重试都失败
-                    logger.error(f"达到最大重试次数 ({max_retries})，无法完成请求")
-                    # 在流式生成中返回错误信息
-                    yield f"生成回复时出错，已尝试 {max_retries} 次: {str(e)}"
-                    
-                    # 尝试使用备选方法
-                    logger.warning("尝试使用非流式生成作为备选方案")
-                    try:
-                        # 尝试非流式生成文本
-                        non_streaming_response = await self.generate(prompt, max_tokens, temperature, system_message)
-                        yield "\n\n切换为非流式生成，响应如下：\n\n"
-                        yield non_streaming_response
-                    except Exception as backup_error:
-                        logger.error(f"备选方法也失败: {str(backup_error)}")
-                        yield "\n\n无法完成响应生成。请稍后再试。"
-                    return
+                logger.info("尝试使用非流式方式生成...")
+                non_streaming_response = await self.generate(prompt, max_tokens, temperature, None, system_message)
+                yield non_streaming_response
+            except Exception as e2:
+                logger.error(f"非流式生成文本时出错: {e2}", exc_info=True)
+                yield f"生成文本时出错: {str(e2)}"

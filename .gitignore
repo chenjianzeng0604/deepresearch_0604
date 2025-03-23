@@ -1,0 +1,97 @@
+# ======================================
+# 通用规则（操作系统/编辑器）
+# ======================================
+
+# 操作系统元文件
+.DS_Store            # macOS 属性文件
+Thumbs.db            # Windows 缩略图缓存
+desktop.ini          # Windows 文件夹配置
+
+# 编辑器/IDE 缓存
+.idea/               # JetBrains IDE
+.vscode/             # VS Code（但通常建议保留 workspace 设置）
+*.swp                # Vim 临时文件
+*.swo
+*.sublime-workspace  # Sublime Text
+
+# ======================================
+# 语言相关规则 (Python)
+# ======================================
+
+# 字节码和编译文件
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+pip-selfcheck.json
+
+# 日志和覆盖率报告
+.coverage
+htmlcov/
+*.log
+
+# ======================================
+# 语言相关规则 (JavaScript/Node.js)
+# ======================================
+
+# 依赖目录
+node_modules/
+jspm_packages/
+.webpack/
+.serverless/
+.next/               # Next.js 构建
+.nuxt/              # Nuxt.js 构建
+
+# 构建产物
+dist/
+build/
+out/
+.coverage/
+*.tsbuildinfo
+
+# 包管理锁文件
+package-lock.json   # 如果使用 Yarn，可注释此行
+yarn.lock            # 如果使用 npm，可注释此行
+
+# ======================================
+# 通用开发环境规则
+# ======================================
+
+# 敏感文件（切勿提交！）
+.env
+.env.local
+.env.*.local
+*.key
+*.cert
+*.pem
+
+# 调试文件
+*.log
+logs/
+debug/
+
+# 临时文件
+tmp/
+temp/
+
+# 测试工具输出
+.nyc_output/
+/coverage/
+
+# 本地模型文件
+local_models/
+
+# ======================================
+# 显式保留必要文件（防意外忽略）
+# ======================================
+!.gitignore         
+!README.md
+!LICENSE

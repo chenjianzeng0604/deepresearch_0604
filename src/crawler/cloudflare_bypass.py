@@ -14,9 +14,10 @@ class CloudflareBypass:
     def __init__(self, page: Page):
         self.page = page
         self.captcha_api_key = os.getenv("2CAPTCHA_API_KEY")
-        self.max_retries = 3
-        self.cloudflare_bypass_post_submit_wait = int(os.getenv("CLOUDFLARE_BYPASS_POST_SUBMIT_WAIT", 30000))
-        self.cloudflare_bypass_wait_for_timeout = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT", 10000))
+        self.max_retries = 2
+        self.cloudflare_bypass_post_submit_wait = int(os.getenv("CLOUDFLARE_BYPASS_POST_SUBMIT_WAIT", 20000))
+        self.cloudflare_bypass_wait_for_timeout = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT", 5000))
+        self.cloudflare_bypass_wait_for_load_state = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_LOAD_STATE", 10000))
 
     async def handle_cloudflare(self) -> Optional[str]:
         """
@@ -41,24 +42,36 @@ class CloudflareBypass:
                     return await self.page.content()
 
                 await self._rotate_proxy()
-
             except Exception as e:
-                logger.error(f"尝试 {attempt+1} 失败: {str(e)}")
-                await self.page.reload()
+                logger.warning(f"处理Cloudflare验证流程时出错 (尝试 {attempt+1}/{self.max_retries}): {str(e)}")
 
-        return None
+        try: 
+            return await self.page.content()
+        except Exception as final_error:
+            logger.warning(f"最终获取页面内容失败: {str(final_error)}")
+            return None
 
     async def _detect_challenge(self) -> bool:
         """检测是否存在验证挑战"""
-        return await self.page.query_selector("text=Checking if the site connection is secure") is not None
+        try:
+            return await self.page.query_selector("text=Checking if the site connection is secure") is not None
+        except Exception as e:
+            logger.warning(f"检测验证挑战时出错: {str(e)}")
+            # 如果出错，假设存在挑战
+            return True
 
     async def _get_challenge_type(self) -> str:
         """识别挑战类型"""
-        if await self.page.query_selector("iframe[src*='challenges.cloudflare.com']"):
-            return "turnstile"
-        elif await self.page.query_selector(".challenge-image"):
-            return "image"
-        return "auto"
+        try:
+            if await self.page.query_selector("iframe[src*='challenges.cloudflare.com']"):
+                return "turnstile"
+            elif await self.page.query_selector(".challenge-image"):
+                return "image"
+            return "auto"
+        except Exception as e:
+            logger.warning(f"识别挑战类型时出错: {str(e)}")
+            # 如果出错，默认使用自动验证
+            return "auto"
 
     async def _solve_turnstile(self) -> bool:
         """处理Turnstile验证"""
@@ -198,32 +211,58 @@ class CloudflareBypass:
         await self._random_scroll()
         if random.random() < 0.3:
             await self._random_click()
-        await self.page.evaluate("generateMouseMove()")
-        await self.page.wait_for_timeout(self.cloudflare_bypass_wait_for_timeout)
+        
+        for attempt in range(self.max_retries):
+            try:
+                if not await self.page.is_visible("body"):
+                    logger.warning("页面可能已导航，等待页面加载")
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=self.cloudflare_bypass_wait_for_load_state)
+                
+                await self.page.evaluate("generateMouseMove()")
+                await self.page.wait_for_timeout(self.cloudflare_bypass_wait_for_timeout)
+                break
+            except Exception as e:
+                logger.warning(f"模拟人类交互时出错 (尝试 {attempt+1}/{self.max_retries}): {str(e)}")
+                try:
+                    await self.page.reload()
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=self.cloudflare_bypass_wait_for_load_state)
+                except Exception as reload_error:
+                    logger.warning(f"重新加载页面失败: {str(reload_error)}")
 
     async def _random_mouse_movement(self):
         """生成随机鼠标轨迹"""
-        for _ in range(random.randint(3, 5)):
-            x = random.randint(0, 800)
-            y = random.randint(0, 600)
-            await self.page.mouse.move(x, y)
-            await self.page.wait_for_timeout(random.randint(50, 300))
+        try:
+            for _ in range(random.randint(3, 5)):
+                x = random.randint(0, 800)
+                y = random.randint(0, 600)
+                await self.page.mouse.move(x, y)
+                await self.page.wait_for_timeout(random.randint(50, 300))
+        except Exception as e:
+            logger.warning(f"随机鼠标移动时出错: {str(e)}")
 
     async def _random_scroll(self):
         """随机滚动页面"""
-        scrolls = random.randint(1, 3)
-        for _ in range(scrolls):
-            await self.page.mouse.wheel(
-                0, 
-                random.randint(300, 800) * random.choice([1, -1])
-            )
-            await self.page.wait_for_timeout(random.randint(500, 1500))
+        try:
+            scrolls = random.randint(1, 3)
+            for _ in range(scrolls):
+                await self.page.mouse.wheel(
+                    0, 
+                    random.randint(300, 800) * random.choice([1, -1])
+                )
+                await self.page.wait_for_timeout(random.randint(500, 1500))
+        except Exception as e:
+            logger.warning(f"随机滚动页面时出错: {str(e)}")
+            # 继续执行，不抛出异常
 
     async def _random_click(self):
         """在随机位置点击"""
-        x = random.randint(0, 800)
-        y = random.randint(0, 600)
-        await self.page.mouse.click(x, y, delay=random.randint(50, 200))
+        try:
+            x = random.randint(0, 800)
+            y = random.randint(0, 600)
+            await self.page.mouse.click(x, y, delay=random.randint(50, 200))
+        except Exception as e:
+            logger.warning(f"随机点击时出错: {str(e)}")
+            # 继续执行，不抛出异常
 
     async def _post_submit_wait(self):
         """提交后的等待策略"""

@@ -14,7 +14,7 @@ class LLMConfig(BaseModel):
 
 class SearchConfig(BaseModel):
     """搜索配置"""
-    api_key: Optional[str] = "1f997bddbb3b8d66c27b9164d6f706db93c17854"
+    api_key: Optional[str] = ""
     search_engine: str = "google"  # 可选值: "bing", "google", "duckduckgo"
     max_results: int = 10
     timeout: int = 30
@@ -40,8 +40,8 @@ class AppConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     llm: LLMConfig
-    search: SearchConfig = SearchConfig()
-    distribution: DistributionConfig = DistributionConfig()
+    search: SearchConfig
+    distribution: DistributionConfig
     
     @classmethod
     def from_env(cls):
@@ -58,7 +58,7 @@ class AppConfig(BaseModel):
             port=int(os.getenv("PORT", "8000")),
             
             llm=LLMConfig(
-                api_key=os.getenv("OPENAI_API_KEY", "sk-4e32fb2e78cc41c4961bab56c3b13a64"),
+                api_key=os.getenv("OPENAI_API_KEY", ""),
                 api_base=os.getenv("LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
                 model=os.getenv("LLM_MODEL", "deepseek-r1"),
                 temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
@@ -67,7 +67,7 @@ class AppConfig(BaseModel):
             ),
             
             search=SearchConfig(
-                api_key=os.getenv("GOOGLE_API_KEY", "1f997bddbb3b8d66c27b9164d6f706db93c17854"),
+                api_key=os.getenv("GOOGLE_API_KEY", ""),
                 search_engine=os.getenv("SEARCH_ENGINE", "google"),
                 max_results=int(os.getenv("SEARCH_MAX_RESULTS", "10")),
                 timeout=int(os.getenv("SEARCH_TIMEOUT", "30")),
