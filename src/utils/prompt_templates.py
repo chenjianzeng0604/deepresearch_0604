@@ -86,6 +86,41 @@ PROMPT_TEMPLATES = {
     - 缓解预案  
 
     请先进行维度间的交叉验证分析，再生成最终报告。所有结论必须有至少两个独立维度的数据支持。  
+    """,
+    
+    # 信息充分性评估提示词
+    "INFORMATION_SUFFICIENCY_TEMPLATE": """
+    作为一个研究助手，你的任务是评估我们目前收集的信息是否足够回答用户的查询。
+
+    用户查询: {query}
+
+    已收集的信息:
+    {context_text}
+
+    根据以上收集到的信息，判断是否已足够全面地回答用户查询。
+    如果信息已足够，请输出"SUFFICIENT"。
+    如果信息不足，请输出"INSUFFICIENT"，并简述还缺少哪些方面的信息。
+
+    你的评估:
+    """,
+    
+    # 额外查询生成提示词
+    "ADDITIONAL_QUERIES_TEMPLATE": """
+    作为一个研究助手，你的任务是基于用户的原始查询和已收集的信息，生成3-5个新的搜索查询，以补充我们还缺少的信息。
+
+    原始查询: {original_query}
+
+    已收集的信息:
+    {context_text}
+
+    分析上述信息后，我们还缺少哪些方面的信息？请生成3-5个新的搜索查询，以帮助我们获取更全面的信息。
+    这些查询应该：
+    1. 与原始查询相关，但角度或焦点不同
+    2. 具体而明确，适合搜索引擎使用
+    3. 能够填补已收集信息的空白
+    4. 每个查询不超过10个词
+
+    请直接列出查询，每行一个，不要有编号或其他说明：
     """
 }
 
@@ -142,3 +177,29 @@ class PromptTemplates:
             str: 格式化后的提示词
         """
         return PROMPT_TEMPLATES["DEEP_ANALYSIS_TEMPLATE"].format(query=query, summaries=summaries)
+    
+    @classmethod
+    def format_information_sufficiency_prompt(cls, query: str, context_text: str) -> str:
+        """格式化信息充分性评估提示词
+        
+        Args:
+            query: 用户查询
+            context_text: 已收集的信息文本
+            
+        Returns:
+            str: 格式化后的提示词
+        """
+        return PROMPT_TEMPLATES["INFORMATION_SUFFICIENCY_TEMPLATE"].format(query=query, context_text=context_text)
+    
+    @classmethod
+    def format_additional_queries_prompt(cls, original_query: str, context_text: str) -> str:
+        """格式化额外查询生成提示词
+        
+        Args:
+            original_query: 原始查询
+            context_text: 已收集的信息文本
+            
+        Returns:
+            str: 格式化后的提示词
+        """
+        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(original_query=original_query, context_text=context_text)

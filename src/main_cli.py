@@ -23,6 +23,7 @@ from src.core.news_processor import NewsProcessor
 from src.models.config import AppConfig
 from src.distribution.factory import create_distribution_manager
 from src.utils.formatters import format_report
+from src.crawler.scheduled_crawler import start_scheduler, stop_scheduler
 
 # 加载环境变量
 load_dotenv()
@@ -144,6 +145,61 @@ async def distribute_report_cmd(report_id=None, platforms=None):
         logger.error(f"分发报告失败: {e}", exc_info=True)
         print(f"错误: {e}")
 
+async def start_crawler_cmd(args):
+    """
+    启动定时爬虫任务
+    
+    Args:
+        args: 命令行参数
+    """
+    try:
+        keywords = args.keywords
+        platforms = args.platforms
+        run_now = args.run_now
+        
+        print(f"\n启动定时爬虫任务，关键词：{keywords}，平台：{platforms}")
+        print("任务将在每天凌晨2点和下午2点自动执行")
+        
+        if run_now:
+            print("\n同时执行一次立即爬取")
+            
+        scheduler = await start_scheduler(keywords, platforms, run_now)
+        
+        if scheduler:
+            print("\n定时爬虫任务已成功启动！")
+            print("\n程序将继续在后台运行，可以使用Ctrl+C终止")
+            print("或者使用命令 'python -m src.main_cli scheduler-stop' 停止任务")
+            
+            # 保持程序运行，直到按下Ctrl+C
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except KeyboardInterrupt:
+                print("\n接收到终止信号，正在停止...")
+                await stop_scheduler()
+                print("已停止定时爬虫任务")
+    except Exception as e:
+        logger.error(f"启动定时爬虫任务失败: {e}", exc_info=True)
+        print(f"错误: {e}")
+
+async def stop_crawler_cmd(args):
+    """
+    停止定时爬虫任务
+    
+    Args:
+        args: 命令行参数
+    """
+    try:
+        print("\n正在停止定时爬虫任务...")
+        result = await stop_scheduler()
+        if result:
+            print("已成功停止定时爬虫任务")
+        else:
+            print("没有正在运行的定时爬虫任务")
+    except Exception as e:
+        logger.error(f"停止定时爬虫任务失败: {e}", exc_info=True)
+        print(f"错误: {e}")
+
 def setup_parser():
     """
     设置命令行参数解析器
@@ -163,17 +219,30 @@ def setup_parser():
     # 列出报告
     list_parser = subparsers.add_parser("list", help="列出报告")
     list_parser.add_argument("--limit", type=int, default=10, help="最大列出数量 (默认: 10)")
+    list_parser.add_argument("--type", help="报告类型过滤")
     
     # 分发报告
     distribute_parser = subparsers.add_parser("distribute", help="分发报告")
     distribute_parser.add_argument("id", help="报告ID")
     distribute_parser.add_argument("--platforms", nargs="+", help="分发平台列表")
     
+    # 启动定时爬虫任务
+    scheduler_parser = subparsers.add_parser("scheduler-start", help="启动定时爬虫任务")
+    scheduler_parser.add_argument("--keywords", nargs="+", required=True, help="搜索关键词列表 (必填，可多个)")
+    scheduler_parser.add_argument("--platforms", nargs="+", 
+                        default=["web_site", "github", "arxiv", "weixin", "search"],
+                        help="搜索平台列表 (可选，默认全部平台)")
+    scheduler_parser.add_argument("--run-now", action="store_true", help="是否立即执行一次爬虫任务")
+    
+    # 停止定时爬虫任务
+    subparsers.add_parser("scheduler-stop", help="停止定时爬虫任务")
+    
     return parser
 
 async def main():
     parser = setup_parser()
     args = parser.parse_args()
+    
     if args.command == "generate":
         async for update in generate_report_cmd(args):
             print(update)
@@ -181,6 +250,10 @@ async def main():
         await list_reports_cmd(args)
     elif args.command == "distribute":
         await distribute_report_cmd(report_id=args.id, platforms=args.platforms)
+    elif args.command == "scheduler-start":
+        await start_crawler_cmd(args)
+    elif args.command == "scheduler-stop":
+        await stop_crawler_cmd(args)
     else:
         parser.print_help()
 

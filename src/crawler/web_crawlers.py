@@ -18,11 +18,10 @@ from fake_useragent import UserAgent
 from aiohttp import ClientSession
 from src.vectordb.milvus_dao import MilvusDao
 import uuid
-from pymilvus import DataType
-from pymilvus import MilvusClient
 from playwright.async_api import async_playwright
 from src.crawler.cloudflare_bypass import CloudflareBypass
 from src.utils.prompt_templates import PromptTemplates
+from src.vectordb.schema_manager import MilvusSchemaManager
 from src.models.config import AppConfig
 from src.utils.llm_client import LLMClient
 from datetime import datetime, timezone
@@ -198,59 +197,44 @@ class WebCrawler:
             async with sem:
                 if self.is_pdf_url(link):
                     content = await self.extract_pdf(link)
-                    content = await self._generate_summary(query, content)
                     if not content or len(content.strip()) == 0:
                         content = ""
                     return {"url": link, "content": content}
                 else:
                     content = await self.fetch_url_md(link)
-                    content = await self._generate_summary(query, content)
                     if not content or len(content.strip()) == 0:
                         content = ""
                     return {"url": link, "content": content}
         
         tasks = [fetch_article_with_semaphore(link) for link in links[:self.crawler_max_links_result]]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"获取文章信息时发生错误: {str(result)}")
-                continue
-                
-            if len(result['content'].strip()) > 0:
-                schema = MilvusClient.create_schema(
-                    auto_id=False,
-                    enable_dynamic_field=True,
-                )
-                schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=36)
-                schema.add_field("url", DataType.VARCHAR, max_length=500)
-                schema.add_field("content", DataType.VARCHAR, max_length=65535)
-                schema.add_field("create_time", DataType.INT64)
-                schema.add_field("content_emb", DataType.FLOAT_VECTOR, dim=1024)
 
-                index_params = MilvusClient.prepare_index_params()
-                index_params.add_index(
-                    field_name="content_emb", 
-                    index_type="HNSW",
-                    index_name="idx_content_emb",
-                    metric_type="COSINE",
-                    params={"M": 8, "efConstruction": 200}
-                )
-                contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
-                for content in contents:
-                    content_embs = self.milvus_dao._generate_embeddings([content])
-                    data = [{
-                        "id": str(uuid.uuid4()),
-                        "url": result['url'],
-                        "content": content,
-                        "content_emb": content_embs[0],
-                        "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
-                    }]
-                    self.milvus_dao._store_in_milvus(self.milvus_dao.collection_name, schema, index_params, data)
-                    rows += 1
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.error(f"获取文章信息时发生错误: {str(result)}")
+                    continue
+                    
+                if len(result['content'].strip()) > 0:
+                    schema, index_params = MilvusSchemaManager.get_schema_by_collection_name(self.milvus_dao.collection_name)
+                    contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
+                    for content in contents:
+                        content_embs = self.milvus_dao._generate_embeddings([content])
+                        data = [{
+                            "id": str(uuid.uuid4()),
+                            "url": result['url'],
+                            "content": content,
+                            "content_emb": content_embs[0],
+                            "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
+                        }]
+                        self.milvus_dao._store_in_milvus(self.milvus_dao.collection_name, schema, index_params, data)
+                        rows += 1
         
-        logger.info(f"成功写入{rows}行数据")
-        return results
+            logger.info(f"成功写入{rows}行数据")
+            return results
+        except Exception as e:
+            logger.error(f"获取文章信息时发生错误: {str(e)}")
+            return []
 
     def cut_string_by_length(self, s, length):
         """
@@ -364,25 +348,25 @@ class WebCrawler:
                 color_scheme="dark"
             )
 
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                })
-                window.generateMouseMove = () => {
-                    const path = Array.from({length: 20}, () => ({
-                        x: Math.random() * window.innerWidth,
-                        y: Math.random() * window.innerHeight,
-                        duration: Math.random() * 300 + 200
-                    }))
-                    path.forEach(p => {
-                        window.dispatchEvent(new MouseEvent('mousemove', p))
-                    })
-                }
-            """)
-
-            page = await context.new_page()
-
             try:
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    })
+                    window.generateMouseMove = () => {
+                        const path = Array.from({length: 20}, () => ({
+                            x: Math.random() * window.innerWidth,
+                            y: Math.random() * window.innerHeight,
+                            duration: Math.random() * 300 + 200
+                        }))
+                        path.forEach(p => {
+                            window.dispatchEvent(new MouseEvent('mousemove', p))
+                        })
+                    }
+                """)
+
+                page = await context.new_page()
+
                 await page.route("**/*", lambda route: route.abort() 
                     if route.request.resource_type in {"image", "stylesheet", "font"} 
                     else route.continue_()
@@ -409,8 +393,14 @@ class WebCrawler:
                         logger.error(f"获取页面内容失败: {str(content_error)}")
                         return None
             finally:
-                await context.close()
-                await browser.close()
+                try:
+                    await context.close()
+                except Exception as context_error:
+                    logger.error(f"关闭浏览器上下文失败: {str(context_error)}")
+                try:
+                    await browser.close()
+                except Exception as browser_error:
+                    logger.error(f"关闭浏览器失败: {str(browser_error)}")
 
     def parse_html(self, html_content: str) -> Optional[BeautifulSoup]:
         """
