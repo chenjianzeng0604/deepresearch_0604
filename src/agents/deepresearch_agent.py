@@ -42,7 +42,14 @@ class DeepresearchAgent:
         self.summary_limit = int(os.getenv("SUMMARY_LIMIT"))
         self.vectordb_limit = int(os.getenv("VECTORDB_LIMIT"))
         self.generate_query_num = int(os.getenv("GENERATE_QUERY_NUM"))
-        self.milvus_dao = MilvusDao(os.getenv("DEEPRESEARCH_COLLECTION"))
+        self.milvus_dao = MilvusDao(
+            uri=os.getenv("MILVUS_URI", "http://localhost:19530"),
+            user=os.getenv("MILVUS_USER", ""),
+            password=os.getenv("MILVUS_PASSWORD", ""),
+            db_name=os.getenv("MILVUS_DB_NAME", "default"),
+            reconnect_attempts=int(os.getenv("MILVUS_RECONNECT_ATTEMPTS", "3")),
+            reconnect_delay=int(os.getenv("MILVUS_RECONNECT_DELAY", "2"))
+        )
         self.llm_client = LLMClient(api_key=self.config.llm.api_key, 
                                         model=self.config.llm.model, 
                                         api_base=self.config.llm.api_base)
@@ -149,9 +156,9 @@ class DeepresearchAgent:
                         except Exception as e:
                             logger.error(f"爬取搜索结果时出错: {str(e)}", exc_info=True)
 
-                milvus_contents = self.milvus_dao._search(
-                    collection_name=self.milvus_dao.collection_name,
-                    data=self.milvus_dao._generate_embeddings(refined_queries),
+                milvus_contents = self.milvus_dao.search(
+                    collection_name=os.getenv("DEEPRESEARCH_COLLECTION"),
+                    data=self.milvus_dao.generate_embeddings(refined_queries),
                     limit=self.vectordb_limit,
                     output_fields=["id", "url", "content", "create_time"]
                 )
@@ -229,9 +236,9 @@ class DeepresearchAgent:
             
         # 准备上下文信息
         context_text = ""
-        for i, result in enumerate(results[:5], 1):  # 只使用前5个结果评估，避免过长
+        for i, result in enumerate(results[:10], 1):  # 只使用前10个结果评估，避免过长
             if 'content' in result and result['content']:
-                snippet = result['content'][:500]  # 取内容前500个字符
+                snippet = result['content'][:1000]  # 取内容前1000个字符
                 context_text += f"文档{i}: {snippet}...\n\n"
         
         # 使用模板构建提示词

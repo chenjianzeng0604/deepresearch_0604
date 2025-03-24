@@ -10,8 +10,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, AsyncGenerator
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -95,44 +94,105 @@ async def index(request: Request):
     """
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/api/chat")
+async def chat_sse(request: Request):
+    """
+    SSE聊天接口 - GET请求版本，为了支持EventSource
+    """
+    # 从查询参数获取stream_id
+    stream_id = request.query_params.get("stream_id")
+    if not stream_id:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少stream_id参数"}
+        )
+    
+    # 从会话存储中恢复请求数据
+    # 前端需要实现将POST请求数据存储到sessionStorage的逻辑
+    # 这里我们通过REST API将参数直接传递
+    message = request.query_params.get("message")
+    session_id = request.query_params.get("session_id", "")
+    
+    if not message:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少消息内容"}
+        )
+    
+    agent = DeepresearchAgent(session_id=session_id)
+    
+    async def generate():
+        # 使用SSE格式发送事件
+        yield f"event: status\ndata: 正在处理您的请求...\n\n"
+        
+        full_response = ""
+        
+        # 进行研究
+        try:
+            research_results = await agent._research(ChatMessage(message=message))
+            yield f"event: status\ndata: 正在组织回复内容...\n\n"
+            
+            async for chunk in agent._generate_response_stream(ChatMessage(message=message), research_results):
+                if isinstance(chunk, dict):
+                    chunk_data = chunk
+                else:
+                    chunk_data = {"type": "content", "content": chunk}
+                
+                if chunk_data["type"] == "content":
+                    full_response += chunk_data["content"]
+                
+                # 转换为SSE格式
+                yield f"event: {chunk_data['type']}\ndata: {json.dumps(chunk_data)}\n\n"
+            
+            await send_email_with_results(message, full_response)
+        except Exception as e:
+            error_msg = f"处理请求时出错: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"  # 禁用Nginx缓冲
+    })
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """
-    聊天API
-    
-    Args:
-        request: 聊天请求
-        
-    Returns:
-        StreamingResponse: 流式响应
+    聊天接口 - POST请求版本，兼容非SSE客户端
     """
-    session_id = request.session_id or str(uuid.uuid4())
-    agent = get_agent(session_id)
-    
-    message = ChatMessage(
-        session_id=session_id,
-        message=request.message,
-        metadata={"platforms": ["web_site", "search", "github", "arxiv", "weibo", "weixin", "twitter"]}
-    )
-    
-    full_response = ""
+    print(f"收到聊天请求: {request.message}")
+    agent = DeepresearchAgent(session_id=request.session_id)
     
     async def generate():
+        # 使用老式换行分隔的JSON流式传输
+        yield f"{json.dumps({'type': 'status', 'content': '正在处理您的请求...'})}\n"
         
-        nonlocal full_response
+        full_response = ""
         
-        research_results = await agent._research(message)
-        
-        async for chunk in agent._generate_response_stream(message, research_results):
-            if isinstance(chunk, dict):
-                yield f"data: {json.dumps(chunk)}\n\n"
-            else:
-                full_response += chunk
-                yield f"data: {json.dumps({'type': 'content', 'content': chunk})}\n\n"
-        
-        await send_email_with_results(message.message, full_response)
+        # 进行研究
+        try:
+            research_results = await agent._research(ChatMessage(message=request.message))
+            yield f"{json.dumps({'type': 'status', 'content': '正在组织回复内容...'})}\n"
+            
+            async for chunk in agent._generate_response_stream(ChatMessage(message=request.message), research_results):
+                if isinstance(chunk, dict):
+                    chunk_data = chunk
+                else:
+                    chunk_data = {"type": "content", "content": chunk}
+                
+                if chunk_data["type"] == "content":
+                    full_response += chunk_data["content"]
+                
+                yield f"{json.dumps(chunk_data)}\n"
+            
+            await send_email_with_results(request.message, full_response)
+        except Exception as e:
+            error_msg = f"处理请求时出错: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            yield f"{json.dumps({'type': 'error', 'content': error_msg})}\n"
     
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(generate(), media_type="application/json")
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
