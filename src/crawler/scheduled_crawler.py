@@ -33,6 +33,30 @@ class ScheduledCrawler:
         self.agent = DeepresearchAgent()
         self.scheduler = AsyncIOScheduler()
         self.running = False
+        self.semaphore = asyncio.Semaphore(int(os.getenv("CRAWLER_MAX_CONCURRENT_TASKS", 3)))
+    
+    async def _execute_task_with_semaphore(self, task_func, *args, **kwargs):
+        """
+        使用信号量执行任务，限制并发数量
+        
+        Args:
+            task_func: 要执行的任务函数
+            args: 位置参数
+            kwargs: 关键字参数
+            
+        Returns:
+            任务执行结果
+        """
+        async with self.semaphore:
+            logger.debug(f"获取信号量，执行任务: {task_func.__name__}")
+            try:
+                result = await task_func(*args, **kwargs)
+                return result
+            except Exception as e:
+                logger.error(f"任务执行出错: {task_func.__name__}, {str(e)}", exc_info=True)
+                raise
+            finally:
+                logger.debug(f"释放信号量，任务完成: {task_func.__name__}")
     
     async def crawl_content(self, query: str, platforms: List[str]) -> tuple:
         """
@@ -81,12 +105,13 @@ class ScheduledCrawler:
                                 search_url = search_url_format.format(encoded_query)
                                 logger.info(f"从 {search_engine} 获取 '{query}' 相关文章，URL: {search_url}")
                                 
-                                links = await web_crawler.parse_sub_url(search_url)
+                                links = await self._execute_task_with_semaphore(web_crawler.parse_sub_url, search_url)
                                 if not links:
                                     logger.warning(f"无法从 {search_url} 获取文章: {query}")
                                     continue
                                 all_links.extend(links)
-                                tasks.append(web_crawler.fetch_article_and_save2milvus(query, links))
+                                tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                                    web_crawler.fetch_article_and_save2milvus, query, links)))
                             except Exception as e:
                                 logger.error(f"从 {search_engine} 获取文章时出错: {query}, {str(e)}", exc_info=True)
                     else:
@@ -95,7 +120,8 @@ class ScheduledCrawler:
                     # 处理自定义搜索URL
                     if hasattr(self.agent.crawler_manager.config, 'search_url') and self.agent.crawler_manager.config.search_url and len(self.agent.crawler_manager.config.search_url) > 0:
                         logger.info(f"使用自定义搜索URL获取 '{query}' 相关文章")
-                        tasks.append(web_crawler.fetch_article_and_save2milvus(query, self.agent.crawler_manager.config.search_url))
+                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                            web_crawler.fetch_article_and_save2milvus, query, self.agent.crawler_manager.config.search_url)))
                 except Exception as e:
                     logger.error(f"Web站点爬取时出错: {query}, {str(e)}", exc_info=True)
             
@@ -104,12 +130,13 @@ class ScheduledCrawler:
                 try:
                     github_crawler = self.agent.crawler_manager.github_crawler
                     logger.info(f"从GitHub获取 '{query}' 相关仓库")
-                    links = await github_crawler.parse_sub_url(query)
+                    links = await self._execute_task_with_semaphore(github_crawler.parse_sub_url, query)
                     if not links:
                         logger.warning(f"无法从 GitHub 获取仓库: {query}")
                     else:
                         all_links.extend(links)
-                        tasks.append(github_crawler.fetch_article_and_save2milvus(query, links))
+                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                            github_crawler.fetch_article_and_save2milvus, query, links)))
                 except Exception as e:
                     logger.error(f"GitHub仓库爬取时出错: {query}, {str(e)}", exc_info=True)
 
@@ -118,12 +145,13 @@ class ScheduledCrawler:
                 try:
                     arxiv_crawler = self.agent.crawler_manager.arxiv_crawler
                     logger.info(f"从arXiv获取 '{query}' 相关论文")
-                    links = await arxiv_crawler.parse_sub_url(query)
+                    links = await self._execute_task_with_semaphore(arxiv_crawler.parse_sub_url, query)
                     if not links:
                         logger.warning(f"无法从 arXiv 获取文章: {query}")
                     else:
                         all_links.extend(links)
-                        tasks.append(arxiv_crawler.fetch_article_and_save2milvus(query, links))
+                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                            arxiv_crawler.fetch_article_and_save2milvus, query, links)))
                 except Exception as e:
                     logger.error(f"arXiv论文爬取时出错: {query}, {str(e)}", exc_info=True)
 
@@ -132,12 +160,13 @@ class ScheduledCrawler:
                 try:
                     wechat_crawler = self.agent.crawler_manager.wechat_crawler
                     logger.info(f"从微信获取 '{query}' 相关文章")
-                    links = await wechat_crawler.parse_sub_url(query)
+                    links = await self._execute_task_with_semaphore(wechat_crawler.parse_sub_url, query)
                     if not links:
                         logger.warning(f"无法从微信获取文章: {query}")
                     else:
                         all_links.extend(links)
-                        tasks.append(wechat_crawler.fetch_article_and_save2milvus(query, links))
+                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                            wechat_crawler.fetch_article_and_save2milvus, query, links)))
                 except Exception as e:
                     logger.error(f"微信文章爬取时出错: {query}, {str(e)}", exc_info=True)
 
@@ -145,7 +174,7 @@ class ScheduledCrawler:
             if "search" in platforms:
                 try:
                     logger.info(f"使用WebSearcher搜索获取 '{query}' 相关文章")
-                    search_results = await self.agent.web_searcher.search(query)
+                    search_results = await self._execute_task_with_semaphore(self.agent.web_searcher.search, query)
                     if not search_results:
                         logger.warning(f"无法通过WebSearcher获取搜索结果: {query}")
                     else:
@@ -156,13 +185,14 @@ class ScheduledCrawler:
                         if links:
                             logger.info(f"从WebSearcher获取到 {len(links)} 个有效链接")
                             all_links.extend(links)
-                            tasks.append(self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus(query, links))
+                            tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
+                                self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, query, links)))
                         else:
                             logger.warning(f"搜索结果中没有有效链接: {query}")
                 except Exception as e:
-                    logger.error(f"使用WebSearcher搜索获取文章时出错: {query}, {str(e)}", exc_info=True)
+                    logger.error(f"使用WebSearcher搜索获取文章时出错: {query}, {str(e)}")
         except Exception as e:
-            logger.error(f"获取爬虫内容时出错: {query}, {str(e)}", exc_info=True)
+            logger.error(f"获取爬虫内容时出错: {query}, {str(e)}")
         
         # 为空结果记录日志
         if not all_links:

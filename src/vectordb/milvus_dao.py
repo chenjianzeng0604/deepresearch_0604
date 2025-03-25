@@ -174,7 +174,7 @@ class MilvusDao:
                     logger.error(f"重新连接后检查集合存在性仍然失败: {str(e)}")
             return False
     
-    def create_collection(self, collection_name: str, schema: Dict, index_params: Dict) -> bool:
+    def create_collection(self, collection_name: str, schema, index_params) -> bool:
         """
         创建集合
         
@@ -182,7 +182,6 @@ class MilvusDao:
             collection_name: 集合名称
             schema: 集合架构
             index_params: 索引参数
-            
         Returns:
             bool: 创建是否成功
         """
@@ -232,15 +231,15 @@ class MilvusDao:
             logger.error(f"删除集合失败: {str(e)}")
             return False
 
-    def store(self, collection_name: str, schema: Dict, index_params: Dict, 
+    def store(self, collection_name: str, schema, index_params, 
              data: List[Dict[str, Any]], validate_fn: Optional[Callable[[Dict], bool]] = None) -> bool:
         """
         存储数据到Milvus
         
         Args:
             collection_name: 集合名称
-            schema: 集合架构，创建集合时使用
-            index_params: 索引参数，创建集合时使用
+            schema: 集合架构，创建集合时使用，可以是字典或CollectionSchema对象
+            index_params: 索引参数，创建集合时使用，可以是字典或IndexParams对象
             data: 待存储的数据列表
             validate_fn: 可选的数据验证函数，接收数据项并返回是否有效
             
@@ -274,13 +273,28 @@ class MilvusDao:
                     logger.warning(f"数据验证失败，跳过: {item}")
         else:
             # 使用默认验证：确保所有字段都存在
-            required_fields = [field["name"] for field in schema["fields"]]
-            for item in data:
-                if all(field in item for field in required_fields):
-                    validated_data.append(item)
+            try:
+                # 尝试从schema对象获取字段名
+                if hasattr(schema, 'fields'):
+                    required_fields = [field.name for field in schema.fields]
+                # 从字典获取字段名
+                elif isinstance(schema, dict) and "fields" in schema:
+                    required_fields = [field["name"] for field in schema["fields"]]
                 else:
-                    missing = [field for field in required_fields if field not in item]
-                    logger.warning(f"数据缺少必要字段 {missing}，跳过")
+                    logger.warning("无法从schema获取字段信息，跳过数据验证")
+                    required_fields = []
+                    validated_data = data  # 如果无法获取字段，则直接使用全部数据
+                
+                if required_fields:
+                    for item in data:
+                        if all(field in item for field in required_fields):
+                            validated_data.append(item)
+                        else:
+                            missing = [field for field in required_fields if field not in item]
+                            logger.warning(f"数据缺少必要字段 {missing}，跳过")
+            except Exception as e:
+                logger.error(f"验证数据时出错: {str(e)}")
+                validated_data = data  # 如果验证过程出错，则直接使用全部数据
         
         if not validated_data:
             logger.warning("所有数据验证失败，无数据可写入")
@@ -333,7 +347,6 @@ class MilvusDao:
             logger.warning(f"集合 {collection_name} 不存在")
             return []
         
-        # 准备查询参数
         query_params = {
             "collection_name": collection_name,
             "filter": filter
