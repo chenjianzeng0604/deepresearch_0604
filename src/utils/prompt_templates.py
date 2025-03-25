@@ -106,14 +106,14 @@ PROMPT_TEMPLATES = {
     
     # 额外查询生成提示词
     "ADDITIONAL_QUERIES_TEMPLATE": """
-    作为一个研究助手，你的任务是基于用户的原始查询和已收集的信息，生成3-5个新的搜索查询，以补充我们还缺少的信息。
+    作为一个研究助手，你的任务是基于用户的原始查询和已收集的信息，生成{num}个新的搜索查询，以补充我们还缺少的信息。
 
     原始查询: {original_query}
 
     已收集的信息:
     {context_text}
 
-    分析上述信息后，我们还缺少哪些方面的信息？请生成3-5个新的搜索查询，以帮助我们获取更全面的信息。
+    分析上述信息后，我们还缺少哪些方面的信息？请生成{num}个新的搜索查询，以帮助我们获取更全面的信息。
     这些查询应该：
     1. 与原始查询相关，但角度或焦点不同
     2. 具体而明确，适合搜索引擎使用
@@ -192,14 +192,14 @@ class PromptTemplates:
         return PROMPT_TEMPLATES["INFORMATION_SUFFICIENCY_TEMPLATE"].format(query=query, context_text=context_text)
     
     @classmethod
-    def format_additional_queries_prompt(cls, original_query: str, context_text: str) -> str:
+    def format_additional_queries_prompt(cls, original_query: str, context_text: str, num: int=2) -> str:
         """格式化额外查询生成提示词
         
         Args:
             original_query: 原始查询
             context_text: 已收集的信息文本
-            
+            num: 生成的查询数量
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(original_query=original_query, context_text=context_text)
+        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(original_query=original_query, context_text=context_text, num=num)

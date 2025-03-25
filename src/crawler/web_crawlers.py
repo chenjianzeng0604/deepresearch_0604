@@ -252,7 +252,6 @@ class WebCrawler:
             
             # 按批次处理和保存数据，避免单次操作过大
             batch_size = 5
-            data_batches = []
             current_batch = []
             
             for result in results:
@@ -273,7 +272,8 @@ class WebCrawler:
                     continue
                 
                 try:
-                    schema, index_params = MilvusSchemaManager.get_schema_by_collection_name(os.getenv("DEEPRESEARCH_COLLECTION"))
+                    collection_name = os.getenv("DEEPRESEARCH_COLLECTION")
+                    schema, index_params = MilvusSchemaManager.get_schema_by_collection_name(collection_name)
                     contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
                     
                     for content in contents:
@@ -298,37 +298,37 @@ class WebCrawler:
                             
                             # 当达到批次大小时，处理并清空当前批次
                             if len(current_batch) >= batch_size:
-                                data_batches.append(current_batch)
+                                try:
+                                    success = await self.batch_save_to_milvus(
+                                        collection_name=collection_name, 
+                                        schema=schema, 
+                                        index_params=index_params, 
+                                        data=current_batch
+                                    )
+                                    if success:
+                                        rows += len(current_batch)
+                                    await asyncio.sleep(1)
+                                except Exception as e:
+                                    logger.error(f"写入Milvus失败: {str(e)}")
                                 current_batch = []
                         
                         except Exception as e:
-                            logger.error(f"处理内容块时出错: {str(e)}", exc_info=True)
+                            logger.error(f"处理内容块时出错: {str(e)}")
                 
                 except Exception as e:
-                    logger.error(f"处理文章时出错: {result['url']}, {str(e)}", exc_info=True)
+                    logger.error(f"处理文章时出错: {result['url']}, {str(e)}")
             
             # 确保最后的批次也被处理
             if current_batch:
-                data_batches.append(current_batch)
-            
-            # 按批次写入Milvus
-            collection_name = os.getenv("DEEPRESEARCH_COLLECTION")
-            for batch in data_batches:
-                try:
-                    success = self.milvus_dao.store(
-                        collection_name=collection_name, 
-                        schema=schema, 
-                        index_params=index_params, 
-                        data=batch
-                    )
-                    if success:
-                        rows += len(batch)
-                    else:
-                        logger.warning(f"Milvus数据存储失败，批次大小：{len(batch)}")
-                    # 添加小延迟，避免Milvus过载
-                    await asyncio.sleep(0.5)
-                except Exception as e:
-                    logger.error(f"写入Milvus失败: {str(e)}", exc_info=True)
+                success = await self.batch_save_to_milvus(
+                    collection_name=collection_name, 
+                    schema=schema, 
+                    index_params=index_params, 
+                    data=current_batch
+                )
+                if success:
+                    rows += len(current_batch)
+                await asyncio.sleep(1)
         
             logger.info(f"成功写入{rows}行数据，从{len(links_to_process)}个链接")
             return results
@@ -336,8 +336,23 @@ class WebCrawler:
             logger.warning("爬取任务被取消")
             return []
         except Exception as e:
-            logger.error(f"获取文章信息时发生错误: {str(e)}", exc_info=True)
+            logger.error(f"获取文章信息时发生错误: {str(e)}")
             return []
+
+    async def batch_save_to_milvus(self, collection_name, schema, index_params, data):
+        try:
+            success = self.milvus_dao.store(
+                collection_name=collection_name, 
+                schema=schema, 
+                index_params=index_params, 
+                data=data
+            )
+            if not success:
+                logger.warning(f"Milvus数据存储失败，批次大小：{len(data)}")
+            return success
+        except Exception as e:
+            logger.error(f"批量写入Milvus失败: {str(e)}")
+            return False
     
     def cut_string_by_length(self, s, length):
         """

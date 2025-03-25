@@ -269,16 +269,15 @@ class DeepresearchAgent:
         """
         if not results:
             return [original_query]  # 如果没有结果，返回原始查询
-            
-        # 准备上下文信息
+        
         context_text = ""
-        for i, result in enumerate(results[:5], 1):  # 只使用前5个结果
+        for i, result in results:
             if 'content' in result and result['content']:
-                snippet = result['content'][:300]  # 取内容前300个字符
+                snippet = result['content']
                 context_text += f"文档{i}: {snippet}...\n\n"
         
         # 使用模板构建提示词
-        prompt = PromptTemplates.format_additional_queries_prompt(original_query, context_text)
+        prompt = PromptTemplates.format_additional_queries_prompt(original_query, context_text, self.generate_query_num)
         
         try:
             response = await self.llm_client.generate(prompt)
