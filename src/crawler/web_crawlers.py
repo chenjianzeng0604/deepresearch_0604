@@ -25,6 +25,13 @@ from src.vectordb.schema_manager import MilvusSchemaManager
 from src.models.config import AppConfig
 from src.utils.llm_client import LLMClient
 from datetime import datetime, timezone
+from src.crawler.config import CrawlerConfig
+import re
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+import torch.nn.functional as F
+import numpy as np
+from playwright_stealth import stealth_async
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,7 @@ class WebCrawler:
     
     def __init__(self):
         self.config = AppConfig.from_env()
+        self.crawler_config = CrawlerConfig()
         # 初始化通用MilvusDao客户端
         self.milvus_dao = MilvusDao(
             uri=os.getenv("MILVUS_URI", "http://localhost:19530"),
@@ -89,10 +97,47 @@ class WebCrawler:
         # 排除静态文件（图片、视频、压缩包等）
         static_ext = ('.jpg', '.jpeg', '.png', '.gif', '.css', '.js',
                      '.zip', '.tar', '.gz', '.exe', '.svg', '.ico',
-                     '.mp3', '.mp4', '.avi', '.mov', '.flv', '.wmv')
+                     '.mp3', '.mp4', '.avi', '.mov', '.flv', '.wmv',
+                     '.woff', '.woff2', '.ttf', '.eot', '.otf')
         if any(parsed.path.lower().endswith(ext) for ext in static_ext):
             return False
-        
+
+        # 排除低质量内容链接
+        low_value_patterns = [
+            # 广告、跟踪和分析
+            '/ads/', '/ad/', 'doubleclick', 'analytics', 'tracker', 'click.php',
+            'pixel.php', 'counter.php', 'utm_', 'adserv', 'banner', 'sponsor',
+            
+            # 用户操作和账户页面
+            'redirect', 'share', 'login', 'signup', 'register', 'comment', 
+            'subscribe', 'newsletter', 'account', 'profile', 'password',
+            
+            # 站点信息页
+            'privacy', 'terms', 'about-us', 'contact-us', 'faq', 'help',
+            'cookie', 'disclaimer', 'copyright', 'license', 'sitemap',
+            
+            # 搜索引擎特定页面
+            'www.bing.com/images/search', 'google.com/imgres',
+            'search?', 'search/', '/search', 'query=',
+            
+            # 社交媒体分享链接
+            'facebook.com/sharer', 'twitter.com/intent', 'linkedin.com/share',
+            'plus.google.com', 'pinterest.com/pin', 't.me/share',
+            
+            # 打印、RSS和其他功能页面
+            'print=', 'print/', 'print.html', 'rss', 'feed', 'atom',
+            'pdf=', 'pdf/', 'download=', '/download', 'embed=',
+            
+            # 日历、存档和分类页面
+            'calendar', '/tag/', '/tags/', '/category/', '/categories/',
+            '/archive/', '/archives/', '/author/', '/date/',
+            
+            # 购物车、结账和交易页面
+            'cart', 'checkout', 'basket', 'payment', 'order', 'transaction'
+        ]
+        if any(pattern in url.lower() for pattern in low_value_patterns):
+            return False
+            
         return True
     
     def normalize_url(self, url: str) -> str:
@@ -113,7 +158,7 @@ class WebCrawler:
         )
         return urlunparse(parsed)
     
-    async def extract_pdf(self, url: str) -> Dict[str, Any]:
+    async def extract_pdf(self, url: str) -> str:
         """
         提取PDF文档内容
         
@@ -143,7 +188,7 @@ class WebCrawler:
                                         page_text.replace('\ufffd', '?')  # 替换非法字符
                                     )
                             if text_content:
-                                return {'content': '\n\n'.join(text_content)}
+                                return '\n\n'.join(text_content)
         except Exception as e:
             logger.error(f"提取PDF内容出错: {url}, 错误: {str(e)}")
         
@@ -166,7 +211,6 @@ class WebCrawler:
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
                 absolute_url = urljoin(base_url, href)
-                
                 if self.is_valid_url(absolute_url):
                     links.append(absolute_url)
         except Exception as e:
@@ -184,11 +228,29 @@ class WebCrawler:
             logger.error(f"parse_sub_url出错: {search_url}, 错误: {str(e)}")
             return []
     
-    async def fetch_article_and_save2milvus(self, query: str, links: List[str]) -> List[str]:
-
+    async def fetch_article_and_save2milvus(self, query: str, links: List[str], scenario: str = None) -> List[str]:
+        """
+        获取文章内容并保存到Milvus
+        
+        Args:
+            query: 搜索查询词
+            links: 链接列表
+            scenario: 场景名称，为None时使用默认场景
+            
+        Returns:
+            List[str]: 处理结果
+        """
         if not links or len(links) == 0:
             logger.warning(f"没有有效链接可爬取，查询：{query}")
             return []
+        
+        # 获取场景对应的Milvus集合名称
+        collection_name = self.crawler_config.get_collection_name(scenario)
+        if not collection_name:
+            logger.warning(f"未找到场景 {scenario} 对应的Milvus集合名称")
+            return []
+            
+        logger.info(f"爬取 {query} 的内容，场景: {scenario}, 集合: {collection_name}")
         
         # 将链接按批次处理，避免查询字符串过长
         batch_size = 50
@@ -202,7 +264,7 @@ class WebCrawler:
             
             try:
                 res = self.milvus_dao.query(
-                    collection_name=os.getenv("DEEPRESEARCH_COLLECTION"),
+                    collection_name=collection_name,
                     filter=filter_expr,
                     output_fields=["url"],
                 )
@@ -272,8 +334,7 @@ class WebCrawler:
                     continue
                 
                 try:
-                    collection_name = os.getenv("DEEPRESEARCH_COLLECTION")
-                    schema, index_params = MilvusSchemaManager.get_schema_by_collection_name(collection_name)
+                    schema, index_params = MilvusSchemaManager.get_deepresearch_schema()
                     contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
                     
                     for content in contents:
@@ -330,7 +391,7 @@ class WebCrawler:
                     rows += len(current_batch)
                 await asyncio.sleep(1)
         
-            logger.info(f"成功写入{rows}行数据，从{len(links_to_process)}个链接")
+            logger.info(f"成功写入{rows}行数据到集合 {collection_name}，从{len(links_to_process)}个链接")
             return results
         except asyncio.CancelledError:
             logger.warning("爬取任务被取消")
@@ -412,46 +473,51 @@ class WebCrawler:
 
     async def fetch_url(self, url: str) -> Optional[str]:
         try:
-            content = await self.fetch_url(url, useProxy=False)    
+            return await self.fetch_url(url, useProxy=False)    
         except Exception as e:
             logger.error(f"Failed to fetch URL {url} without proxy: {str(e)}")
-            content = None
-        if content and len(content.strip()) > 0:
-            return content
-        try:
-            return await self.fetch_url(url, useProxy=True)    
-        except Exception as e:
-            logger.error(f"Failed to fetch URL {url} with proxy: {str(e)}")
-            return None
+            try:
+                return await self.fetch_url(url, useProxy=True)    
+            except Exception as e:
+                logger.error(f"Failed to fetch URL {url} with proxy: {str(e)}")
+                return None
     
     async def fetch_url(self, url: str, useProxy: bool = False) -> Optional[str]:
         async with async_playwright() as p:
             if useProxy:
                 logger.info(f"Fetching URL {url} with proxy")
                 browser = await p.chromium.launch(
-                    channel="chrome",
                     headless=True,
                     proxy=self.proxies,
                     args=[
-                        "--disable-blink-features=AutomationControlled",
+                       "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
+                        "--disable-web-security",
+                        "--disable-features=IsolateOrigins,site-per-process",
                         f"--user-agent={UserAgent().random}",
                         "--use-fake-ui-for-media-stream",
-                        "--use-fake-device-for-media-stream"
+                        "--use-fake-device-for-media-stream",
+                        "--disable-gpu",
+                        "--disable-dev-shm-usage",
+                        "--disable-software-rasterizer"
                     ],
                     env={"SSLKEYLOGFILE": "/dev/null"}
                 )
             else:
                 logger.info(f"Fetching URL {url} without proxy")
                 browser = await p.chromium.launch(
-                    channel="chrome",
                     headless=True,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
+                        "--disable-web-security",
+                        "--disable-features=IsolateOrigins,site-per-process",
                         f"--user-agent={UserAgent().random}",
                         "--use-fake-ui-for-media-stream",
-                        "--use-fake-device-for-media-stream"
+                        "--use-fake-device-for-media-stream",
+                        "--disable-gpu",
+                        "--disable-dev-shm-usage",
+                        "--disable-software-rasterizer"
                     ],
                     env={"SSLKEYLOGFILE": "/dev/null"}
                 )
@@ -485,14 +551,16 @@ class WebCrawler:
 
                 page = await context.new_page()
 
+                await stealth_async(page)
+
                 await page.route("**/*", lambda route: route.abort() 
-                    if route.request.resource_type in {"image", "stylesheet", "font"} 
+                    if route.request.resource_type in {"image", "media", "stylesheet", "font"}
                     else route.continue_()
                 )
 
                 await page.goto(
                     url, 
-                    wait_until="domcontentloaded", 
+                    wait_until="networkidle", 
                     timeout=self.crawler_fetch_url_timeout * 1000
                 )
 
@@ -501,15 +569,25 @@ class WebCrawler:
                     # 先尝试模拟人类交互
                     await cloudflare_bypass.simulate_human_interaction()
                     # 然后处理Cloudflare挑战
-                    return await cloudflare_bypass.handle_cloudflare()
+                    text = await cloudflare_bypass.handle_cloudflare()
                 except Exception as e:
                     logger.warning(f"Cloudflare绕过过程中出错: {str(e)}")
                     # 即使出错也尝试获取页面内容
                     try:
-                        return await page.content()
+                        text = await page.content()
                     except Exception as content_error:
                         logger.error(f"获取页面内容失败: {str(content_error)}")
+                        text = None
+                if text:
+                    is_high_quality, score = quality_classifier.predict_quality(text)
+                    if is_high_quality:
+                        logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
+                        return text
+                    else:
+                        logger.warning(f"过滤低质量内容 (分数: {score:.2f}): {url}")
                         return None
+                else:
+                    return None
             finally:
                 try:
                     await context.close()
@@ -601,3 +679,160 @@ class WebCrawler:
             bullets='',
             wrap_text=False    
         )
+
+class ContentQualityClassifier:
+    """
+    使用BERT模型对网页内容进行质量分类
+    """
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.max_length = 512
+        self.quality_threshold = 0.7  # 质量阈值，高于此值的内容被视为高质量
+        
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_models")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # 加载模型和分词器
+        try:
+            snapshot_dir = os.path.join(
+                cache_dir,
+                "models--distilbert-base-uncased",
+                "snapshots",
+                os.listdir(f"{cache_dir}/models--distilbert-base-uncased/snapshots")[0]
+            )
+            logger.info(f"尝试从本地加载模型: {snapshot_dir}")
+            self.tokenizer = AutoTokenizer.from_pretrained(snapshot_dir)
+            self.model = AutoModelForSequenceClassification.from_pretrained(snapshot_dir, num_labels=2)
+            self.model.to(self.device)
+            self.model.eval()
+            
+            logger.info("初始化内容质量分类器完成 (使用通用BERT模型)")
+        except Exception as e:
+            logger.error(f"初始化内容质量分类器失败: {str(e)}")
+            self.tokenizer = None
+            self.model = None
+    
+    def _preprocess_text(self, text):
+        """预处理文本，提取有意义的内容片段"""
+        if not text:
+            return ""
+            
+        # 移除HTML标签
+        text = re.sub(r'<[^>]+>', ' ', text)
+        
+        # 移除多余空白字符
+        text = re.sub(r'\s+', ' ', text)
+        
+        # 提取最有意义的片段（文本开头、中间和结尾）
+        if len(text) > self.max_length * 3:
+            start = text[:self.max_length]
+            middle_start = len(text) // 2 - self.max_length // 2
+            middle = text[middle_start:middle_start + self.max_length]
+            end = text[-self.max_length:]
+            return start + " " + middle + " " + end
+        return text
+    
+    def predict_quality(self, text):
+        """
+        预测内容质量
+        
+        Args:
+            text: 网页内容文本
+            
+        Returns:
+            tuple: (is_high_quality, score)
+        """
+        # 首先使用基本规则过滤
+        if self._rule_based_filter(text):
+            return False, 0.0
+        
+        # 如果没有模型，回退到规则过滤
+        if self.tokenizer is None or self.model is None:
+            return not self._rule_based_filter(text), 0.5
+        
+        try:
+            processed_text = self._preprocess_text(text)
+            
+            # 使用BERT模型进行分类
+            inputs = self.tokenizer(
+                processed_text, 
+                truncation=True, 
+                padding=True, 
+                max_length=self.max_length,
+                return_tensors="pt"
+            ).to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                probabilities = torch.nn.functional.softmax(outputs.logits, dim=1)
+                quality_score = probabilities[0][1].item()  # 高质量的概率
+            
+            is_high_quality = quality_score > self.quality_threshold
+            return is_high_quality, quality_score
+        except Exception as e:
+            logger.error(f"预测内容质量时出错: {str(e)}")
+            # 出错时默认为高质量，避免过滤掉潜在有用内容
+            return True, 0.5
+    
+    def _rule_based_filter(self, text):
+        """基础规则过滤，检测明显的低质量内容"""
+        if not text:
+            return True
+            
+        # 文本过短
+        if len(text) < 150:
+            return True
+            
+        # 规则1: 检测乱码（非中文/英文/数字/常用标点符号占比过高）
+        non_valid_chars = re.findall(r'[^\u4e00-\u9fa5a-zA-Z0-9，。！？、,\.!?]', text)
+        if len(non_valid_chars) / max(len(text), 1) > 0.3:  # 非有效字符超过30%
+            return True
+            
+        # 规则2: 重复内容检测
+        words = text.split()
+        if len(words) > 20 and len(set(words)) / max(len(words), 1) < 0.4:  # 词汇多样性过低
+            return True
+            
+        # 规则3: 检测垃圾内容标志
+        spam_phrases = [
+            'click here', 'buy now', 'limited offer', 'free download',
+            'make money', 'earn cash', '点击这里', '立即购买', '限时优惠'
+        ]
+        spam_count = sum(1 for phrase in spam_phrases if phrase.lower() in text.lower())
+        if spam_count > 3:
+            return True
+            
+        return False
+    
+    def _heuristic_quality_check(self, text):
+        """基于启发式方法的质量评估"""
+        if not text:
+            return False, 0.0
+            
+        # 1. 计算内容长度得分 (0-0.3)
+        length = len(text)
+        length_score = min(0.3, length / 2000)
+        
+        # 2. 计算段落结构得分 (0-0.2)
+        paragraphs = text.split('\n\n')
+        structure_score = min(0.2, len(paragraphs) / 20)
+        
+        # 3. 评估内容信息密度 (0-0.3)
+        info_keywords = [
+            'research', 'study', 'analysis', 'method', 'result', 'conclusion',
+            '研究', '分析', '方法', '结果', '结论', 'data', '数据', 'algorithm', '算法'
+        ]
+        keyword_count = sum(1 for keyword in info_keywords if keyword.lower() in text.lower())
+        info_score = min(0.3, keyword_count / 10)
+        
+        # 4. 关键词多样性 (0-0.2)
+        words = text.split()
+        diversity_score = min(0.2, len(set(words)) / max(len(words), 1))
+        
+        # 计算总分
+        total_score = length_score + structure_score + info_score + diversity_score
+        is_high_quality = total_score > 0.6
+        
+        return is_high_quality, total_score
+
+quality_classifier = ContentQualityClassifier()

@@ -24,6 +24,7 @@ from src.models.config import AppConfig
 from src.distribution.factory import create_distribution_manager
 from src.utils.formatters import format_report
 from src.crawler.scheduled_crawler import start_scheduler, stop_scheduler
+from src.crawler.config import CrawlerConfig
 
 # 加载环境变量
 load_dotenv()
@@ -154,16 +155,20 @@ async def start_crawler_cmd(args):
     """
     try:
         keywords = args.keywords
-        platforms = args.platforms
         run_now = args.run_now
+        scenario = args.scenario if hasattr(args, 'scenario') else None
         
-        print(f"\n启动定时爬虫任务，关键词：{keywords}，平台：{platforms}")
-        print("任务将在每天凌晨2点和下午2点自动执行")
+        print(f"\n启动定时爬虫任务，关键词：{keywords}")
+        print(f"场景配置: {scenario}")
         
         if run_now:
             print("\n同时执行一次立即爬取")
-            
-        scheduler = await start_scheduler(keywords, platforms, run_now)
+        
+        crawler_config = CrawlerConfig()
+        if not scenario:
+            scenario = crawler_config.default_scenario
+        
+        scheduler = await start_scheduler(keywords, scenario, run_now)
         
         if scheduler:
             print("\n定时爬虫任务已成功启动！")
@@ -230,9 +235,11 @@ def setup_parser():
     scheduler_parser = subparsers.add_parser("scheduler-start", help="启动定时爬虫任务")
     scheduler_parser.add_argument("--keywords", nargs="+", required=True, help="搜索关键词列表 (必填，可多个)")
     scheduler_parser.add_argument("--platforms", nargs="+", 
-                        default=["web_site", "github", "arxiv", "weixin", "search"],
-                        help="搜索平台列表 (可选，默认全部平台)")
+                        default=None,
+                        help="搜索平台列表 (可选，默认根据场景自动选择)")
     scheduler_parser.add_argument("--run-now", action="store_true", help="是否立即执行一次爬虫任务")
+    scheduler_parser.add_argument("--scenario", help="指定场景 (可选)")
+    scheduler_parser.add_argument("--all-scenarios", action="store_true", help="是否同时启动所有场景")
     
     # 停止定时爬虫任务
     subparsers.add_parser("scheduler-stop", help="停止定时爬虫任务")

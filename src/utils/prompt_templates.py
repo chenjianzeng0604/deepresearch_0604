@@ -121,6 +121,21 @@ PROMPT_TEMPLATES = {
     4. 每个查询不超过10个词
 
     请直接列出查询，每行一个，不要有编号或其他说明：
+    """,
+    
+    # 意图识别提示词
+    "INTENT_RECOGNITION_TEMPLATE": """
+    作为智能研究助手，你的任务是分析用户查询，并判断该查询最适合的研究领域。
+
+    用户查询: {query}
+
+    请分析该查询内容，判断其最匹配的专业领域类别。可选的领域有：
+    - general：通用信息查询，没有明确属于特定领域
+    - ai：人工智能、机器学习、深度学习、大模型等AI相关技术
+    - healthcare：医疗健康、生物技术、药物研发等医疗领域
+
+    请仅回复最匹配的领域名称（例如: "ai"），不要包含任何解释或其他文本。
+    如果查询明显跨越多个领域或无法确定，请回复"general"。
     """
 }
 
@@ -199,7 +214,24 @@ class PromptTemplates:
             original_query: 原始查询
             context_text: 已收集的信息文本
             num: 生成的查询数量
+            
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(original_query=original_query, context_text=context_text, num=num)
+        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(
+            original_query=original_query, 
+            context_text=context_text, 
+            num=num
+        )
+        
+    @classmethod
+    def format_intent_recognition_prompt(cls, query: str) -> str:
+        """格式化意图识别提示词
+        
+        Args:
+            query: 用户查询
+            
+        Returns:
+            str: 格式化后的提示词
+        """
+        return PROMPT_TEMPLATES["INTENT_RECOGNITION_TEMPLATE"].format(query=query)

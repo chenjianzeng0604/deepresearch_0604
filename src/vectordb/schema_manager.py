@@ -3,6 +3,8 @@ Milvus 数据库 Schema 管理模块
 负责集中管理所有 Milvus 集合的 schema 和索引参数
 """
 import logging
+import re
+from typing import Tuple, Dict, Any
 from pymilvus import MilvusClient, DataType
 
 logger = logging.getLogger(__name__)
@@ -13,8 +15,11 @@ class MilvusSchemaManager:
     @staticmethod
     def get_deepresearch_schema():
         """
-        获取深度研究集合的 schema 定义
+        获取深度研究集合的 schema 定义，支持不同场景
         
+        Args:
+            scenario: 场景名称，如 'ai', 'finance' 等
+            
         Returns:
             tuple: (schema, index_params) - schema 和索引参数
         """
@@ -39,29 +44,7 @@ class MilvusSchemaManager:
                 metric_type="COSINE",
                 params={"M": 8, "efConstruction": 200}
             )
-            
-            logger.info("成功创建深度研究集合的 schema 和索引参数")
             return schema, index_params
-            
         except Exception as e:
-            logger.error(f"创建深度研究集合的 schema 失败: {str(e)}")
+            logger.error(f"创建深度研究集合 schema 失败: {str(e)}")
             raise e
-    
-    @staticmethod
-    def get_schema_by_collection_name(collection_name: str):
-        """
-        根据集合名称获取对应的 schema 和索引参数
-        
-        Args:
-            collection_name: 集合名称
-            
-        Returns:
-            tuple: (schema, index_params) - schema 和索引参数
-        """
-        # 可以根据不同的集合名称返回不同的 schema
-        if "deepresearch" in collection_name.lower():
-            return MilvusSchemaManager.get_deepresearch_schema()
-        
-        # 默认返回深度研究集合的 schema
-        logger.warning(f"未找到集合 {collection_name} 的 schema 定义，使用默认 schema")
-        return MilvusSchemaManager.get_deepresearch_schema()

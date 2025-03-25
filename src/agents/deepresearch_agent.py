@@ -11,7 +11,6 @@ import uuid
 import json
 
 from src.crawler.crawler_manager import CrawlerManager
-from src.search.web_searcher import WebSearcher
 from src.utils.llm_client import LLMClient
 from src.models.config import AppConfig
 from src.crawler.web_crawlers import WebCrawler
@@ -19,6 +18,7 @@ from src.models.response import ChatMessage, ChatResponse
 from src.utils.json_parser import str2Json
 from src.vectordb.milvus_dao import MilvusDao
 from src.utils.prompt_templates import PromptTemplates
+from src.crawler.config import CrawlerConfig
 from urllib.parse import quote
 import os
 
@@ -38,6 +38,7 @@ class DeepresearchAgent:
         """
         session_id = session_id or str(uuid.uuid4())
         self.config = AppConfig.from_env()
+        self.crawler_config = CrawlerConfig()
         self.session_id = session_id
         self.summary_limit = int(os.getenv("SUMMARY_LIMIT"))
         self.vectordb_limit = int(os.getenv("VECTORDB_LIMIT"))
@@ -54,10 +55,6 @@ class DeepresearchAgent:
                                         model=self.config.llm.model, 
                                         api_base=self.config.llm.api_base)
         self.crawler_manager = CrawlerManager()
-        self.web_searcher = WebSearcher(
-            api_key=self.config.search.api_key,
-            config=self.config.search
-        )
         self.research_max_iterations = int(os.getenv("RESEARCH_MAX_ITERATIONS"))
     
     async def process_stream(self, message, **kwargs):
@@ -78,6 +75,34 @@ class DeepresearchAgent:
             else:
                 yield chunk
     
+    async def _recognize_intent(self, query: str) -> str:
+        """
+        识别用户查询的意图，确定对应的研究场景
+        
+        Args:
+            query: 用户查询文本
+            
+        Returns:
+            str: 识别的场景名称
+        """
+        try:
+            logger.info(f"识别查询意图: {query}")
+            prompt = PromptTemplates.format_intent_recognition_prompt(query)
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                system_message=PromptTemplates.get_system_message()
+            )
+            scenario = response.strip().lower()
+            if scenario in self.crawler_config.supported_scenarios:
+                logger.info(f"查询 '{query}' 识别为场景: {scenario}")
+                return scenario
+            else:
+                logger.warning(f"意图识别返回了不支持的场景: {scenario}，使用默认场景")
+                return self.crawler_config.default_scenario
+        except Exception as e:
+            logger.error(f"意图识别出错: {str(e)}")
+            return self.crawler_config.default_scenario
+    
     async def _research(self, message):
         """
         执行研究，优先从Milvus迭代查询获取数据，间歇性使用搜索引擎补充
@@ -89,100 +114,108 @@ class DeepresearchAgent:
             研究结果
         """
         all_results = []
+        scenario = await self._recognize_intent(message.message)
+        collection_name = self.crawler_config.get_collection_name(scenario)
+            
+        logger.info(f"为查询 '{message.message}' 使用场景 '{scenario}', 集合 '{collection_name}'")
+        
         refined_queries = await self._generate_search_queries(message)
-        all_queries_used = set(refined_queries)  # 记录已使用过的查询词
-        all_urls_seen = set()  # 避免重复处理同一URL
+        all_queries_used = set(refined_queries)
+        all_urls_seen = set()
         
         max_iterations = self.research_max_iterations
         current_iteration = 0
-        min_results_threshold = self.summary_limit
-        search_interval = 2
 
         while current_iteration < max_iterations:
             current_iteration += 1
             logger.info(f"开始第 {current_iteration}/{max_iterations} 轮信息检索")
-            
             try:
                 iteration_results = []
-
-                search_links = []
-                if current_iteration == 1 or (current_iteration % search_interval == 0 and len(all_results) < min_results_threshold):
-                    logger.info(f"第 {current_iteration} 轮: 使用搜索引擎补充数据")
-                    tasks = []
-                    
-                    for query in refined_queries[:2]:
-                        try:
-                            logger.info(f"使用WebSearcher搜索获取文章: {query}")
-                            search_results = await self.web_searcher.search(query)
+                tasks = []
+                for query in refined_queries:
+                    try:
+                        logger.info(f"使用搜索引擎获取文章: {query}")
+                        search_url_formats = self.crawler_config.get_search_url_formats('online_search')
+                        for search_engine, search_url_format in search_url_formats.items():
+                            try:
+                                encoded_query = quote(query)
+                                search_url = search_url_format.format(encoded_query)
+                                logger.info(f"从 {search_engine} 获取 '{query}' 相关文章，URL: {search_url}")
+                                web_crawler = self.crawler_manager.web_crawler
+                                links = await web_crawler.parse_sub_url(search_url)
+                                if not links:
+                                    logger.warning(f"无法从 {search_url} 获取文章链接: {query}")
+                                    continue
+                                links = [link for link in links if link not in all_urls_seen]
+                                all_urls_seen.update(links)
+                                task = asyncio.create_task(web_crawler.fetch_article_and_save2milvus(query, links, scenario))
+                                tasks.append(task)
+                                logger.info(f"为查询 '{query}' 找到 {len(links)} 个新链接")
+                            except Exception as e:
+                                logger.error(f"从 {search_engine} 获取文章时出错: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"使用搜索引擎搜索获取文章时出错: {query}, {str(e)}")
+                
+                if tasks:
+                    try:
+                        search_contents = await asyncio.gather(*tasks, return_exceptions=True)
+                        if search_contents:
+                            search_unique_contents = {}
+                            for result in search_contents:
+                                if result is not None and \
+                                    (isinstance(result, dict) and 
+                                    'content' in result and 
+                                    result['content'] and 
+                                    len(result['content'].strip()) > 0 and 
+                                    'url' in result and 
+                                    result['url'] not in [item.get('url') for item in all_results] and
+                                    result['url'] not in [item.get('url') for item in iteration_results]):
+                                    search_unique_contents[result['url']] = result
+                            search_results = list(search_unique_contents.values())
                             if search_results:
-                                links = []
-                                for result in search_results:
-                                    if "link" in result and result["link"] and result["link"] not in all_urls_seen:
-                                        links.append(result["link"])
-                                        all_urls_seen.add(result["link"])
-                                        
-                                if links:
-                                    search_links.extend(links)
-                                    tasks.append(self.crawler_manager.web_crawler.fetch_article_and_save2milvus(query, links))
-                                    logger.info(f"为查询 '{query}' 找到 {len(links)} 个新链接")
-                                else:
-                                    logger.warning(f"搜索结果中没有新的有效链接: {query}")
-                            else:
-                                logger.warning(f"无法通过WebSearcher获取搜索结果: {query}")
-                        except Exception as e:
-                            logger.error(f"使用WebSearcher搜索获取文章时出错: {query}, {str(e)}")
+                                iteration_results.extend(search_results)
+                                logger.info(f"从搜索引擎获取到 {len(search_results)} 条新结果")
+                    except Exception as e:
+                        logger.error(f"爬取搜索结果时出错: {str(e)}", exc_info=True)
+                
+                if collection_name:
+                    milvus_contents = self.milvus_dao.search(
+                        collection_name=collection_name,
+                        data=self.milvus_dao.generate_embeddings(refined_queries),
+                        limit=self.vectordb_limit,
+                        output_fields=["id", "url", "content", "create_time"]
+                    )
                     
-                    if tasks:
-                        try:
-                            search_contents = await asyncio.gather(*tasks, return_exceptions=True)
-                            if search_contents:
-                                search_unique_contents = {}
-                                for result in search_contents:
-                                    if result is not None and \
-                                        (isinstance(result, dict) and 
-                                        'content' in result and 
-                                        result['content'] and 
-                                        len(result['content'].strip()) > 0 and 
-                                        'url' in result and 
-                                        result['url'] not in [item.get('url') for item in all_results] and
-                                        result['url'] not in [item.get('url') for item in iteration_results]):
-                                        search_unique_contents[result['url']] = result
-                                iteration_results.extend(search_unique_contents.values())
+                    milvus_unique_contents = {}
+                    for query_contents in milvus_contents:
+                        if not query_contents:
+                            continue
+                        for contents in query_contents:
+                            entity = contents['entity']
+                            if (isinstance(entity, dict) and 
+                                'content' in entity and 
+                                entity['content'] and 
+                                len(entity['content'].strip()) > 0 and 
+                                'url' in entity and 
+                                entity['url'] not in [item.get('url') for item in all_results] and
+                                entity['url'] not in [item.get('url') for item in iteration_results]):
+                                milvus_unique_contents[entity['url']] = entity
+                    
+                    milvus_results = list(milvus_unique_contents.values())
+                    if milvus_results:
+                        iteration_results.extend(milvus_results)
+                        logger.info(f"从Milvus知识库集合 {collection_name} 获取到 {len(milvus_results)} 条新结果")
+                
+                if iteration_results:
+                    all_results.extend(iteration_results)
+                    logger.info(f"第 {current_iteration} 轮新增 {len(iteration_results)} 条结果，总计 {len(all_results)} 条")
+                else:
+                    logger.warning(f"第 {current_iteration} 轮未获取到新结果")
+                
+                if not all_results and current_iteration >= 2:
+                    logger.warning("多次迭代后仍未找到相关结果，提前结束检索")
+                    break
 
-                                search_results = list(search_unique_contents.values())
-                                if search_results:
-                                    iteration_results.extend(search_results)
-                                    logger.info(f"从搜索引擎获取到 {len(search_results)} 条新结果")
-                        except Exception as e:
-                            logger.error(f"爬取搜索结果时出错: {str(e)}", exc_info=True)
-
-                milvus_contents = self.milvus_dao.search(
-                    collection_name=os.getenv("DEEPRESEARCH_COLLECTION"),
-                    data=self.milvus_dao.generate_embeddings(refined_queries),
-                    limit=self.vectordb_limit,
-                    output_fields=["id", "url", "content", "create_time"]
-                )
-                
-                milvus_unique_contents = {}
-                for query_contents in milvus_contents:
-                    if not query_contents:
-                        continue
-                    for contents in query_contents:
-                        entity = contents['entity']
-                        if (isinstance(entity, dict) and 
-                            'content' in entity and 
-                            entity['content'] and 
-                            len(entity['content'].strip()) > 0 and 
-                            'url' in entity and 
-                            entity['url'] not in [item.get('url') for item in all_results] and
-                            entity['url'] not in [item.get('url') for item in iteration_results]):
-                            milvus_unique_contents[entity['url']] = entity
-                
-                milvus_results = list(milvus_unique_contents.values())
-                if milvus_results:
-                    iteration_results.extend(milvus_results)
-                    logger.info(f"从Milvus知识库获取到 {len(milvus_results)} 条新结果")
-                
                 if len(all_results) > 0:
                     is_sufficient = await self._evaluate_information_sufficiency(message.message, all_results)
                     
@@ -199,27 +232,21 @@ class DeepresearchAgent:
                             logger.info(f"生成 {len(refined_queries)} 个新查询继续检索: {refined_queries}")
                         else:
                             logger.info("无法生成新的查询，将使用最初查询继续检索")
-                            refined_queries = list(refined_queries)[:1]
-                
-                if iteration_results:
-                    all_results.extend(iteration_results)
-                    logger.info(f"第 {current_iteration} 轮新增 {len(iteration_results)} 条结果，总计 {len(all_results)} 条")
-                else:
-                    logger.warning(f"第 {current_iteration} 轮未获取到新结果")
-                
-                if not all_results and current_iteration >= 2:
-                    logger.warning("多次迭代后仍未找到相关结果，提前结束检索")
-                    break
             except Exception as e:
                 logger.error(f"第 {current_iteration} 轮检索出错: {str(e)}", exc_info=True)
         
-        logger.info(f"完成研究，共获取 {len(all_results)} 条结果")
+        logger.info(f"研究结束，共收集 {len(all_results)} 条结果")
+        
+        for result in all_results:
+            if "scenario" not in result or not result["scenario"]:
+                result["scenario"] = scenario
+                
         return {
             "query": message.message,
             "results": all_results,
             "count": len(all_results)
         }
-        
+    
     async def _evaluate_information_sufficiency(self, query, results):
         """
         使用LLM评估已获取的信息是否足够回答用户查询
@@ -312,8 +339,6 @@ class DeepresearchAgent:
         
         Args:
             message: 用户消息
-            plan: 规划步骤
-            
         Returns:
             List[str]: 搜索查询语句列表
         """

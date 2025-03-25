@@ -58,276 +58,187 @@ class ScheduledCrawler:
             finally:
                 logger.debug(f"释放信号量，任务完成: {task_func.__name__}")
     
-    async def crawl_content(self, query: str, platforms: List[str]) -> tuple:
-        """
-        爬取内容的核心方法
-        
-        Args:
-            query: 搜索查询
-            platforms: 搜索平台列表
-            
-        Returns:
-            Tuple[List[str], List[asyncio.Task]]: 所有链接和异步任务
-        """
-        all_links = []
-        tasks = []
-            
-        logger.info(f"正在获取爬虫内容: {query}")
-        
-        # 验证输入参数
-        if not query or len(query.strip()) == 0:
-            logger.error("搜索查询为空")
-            return all_links, tasks
-        
-        if not platforms or len(platforms) == 0:
-            logger.error("平台列表为空")
-            return all_links, tasks
-        
-        # 确保平台列表包含有效值
-        valid_platforms = ["web_site", "github", "arxiv", "weixin", "search"]
-        platforms = [p for p in platforms if p in valid_platforms]
-        
-        if not platforms:
-            logger.error("没有有效的平台")
-            return all_links, tasks
-        
-        try:
-            # Web站点爬取
-            if "web_site" in platforms:
-                try:
-                    web_crawler = self.agent.crawler_manager.web_crawler
-                    
-                    # 检查配置中的搜索URL格式是否可用
-                    if hasattr(self.agent.crawler_manager.config, 'search_url_formats') and self.agent.crawler_manager.config.search_url_formats:
-                        for search_engine, search_url_format in self.agent.crawler_manager.config.search_url_formats.items():
-                            try:
-                                encoded_query = quote(query)
-                                search_url = search_url_format.format(encoded_query)
-                                logger.info(f"从 {search_engine} 获取 '{query}' 相关文章，URL: {search_url}")
-                                
-                                links = await self._execute_task_with_semaphore(web_crawler.parse_sub_url, search_url)
-                                if not links:
-                                    logger.warning(f"无法从 {search_url} 获取文章: {query}")
-                                    continue
-                                all_links.extend(links)
-                                tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                                    web_crawler.fetch_article_and_save2milvus, query, links)))
-                            except Exception as e:
-                                logger.error(f"从 {search_engine} 获取文章时出错: {query}, {str(e)}", exc_info=True)
-                    else:
-                        logger.warning("配置中没有有效的搜索URL格式")
-                    
-                    # 处理自定义搜索URL
-                    if hasattr(self.agent.crawler_manager.config, 'search_url') and self.agent.crawler_manager.config.search_url and len(self.agent.crawler_manager.config.search_url) > 0:
-                        logger.info(f"使用自定义搜索URL获取 '{query}' 相关文章")
-                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                            web_crawler.fetch_article_and_save2milvus, query, self.agent.crawler_manager.config.search_url)))
-                except Exception as e:
-                    logger.error(f"Web站点爬取时出错: {query}, {str(e)}", exc_info=True)
-            
-            # GitHub仓库爬取
-            if "github" in platforms:
-                try:
-                    github_crawler = self.agent.crawler_manager.github_crawler
-                    logger.info(f"从GitHub获取 '{query}' 相关仓库")
-                    links = await self._execute_task_with_semaphore(github_crawler.parse_sub_url, query)
-                    if not links:
-                        logger.warning(f"无法从 GitHub 获取仓库: {query}")
-                    else:
-                        all_links.extend(links)
-                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                            github_crawler.fetch_article_and_save2milvus, query, links)))
-                except Exception as e:
-                    logger.error(f"GitHub仓库爬取时出错: {query}, {str(e)}", exc_info=True)
-
-            # arXiv论文爬取
-            if "arxiv" in platforms:
-                try:
-                    arxiv_crawler = self.agent.crawler_manager.arxiv_crawler
-                    logger.info(f"从arXiv获取 '{query}' 相关论文")
-                    links = await self._execute_task_with_semaphore(arxiv_crawler.parse_sub_url, query)
-                    if not links:
-                        logger.warning(f"无法从 arXiv 获取文章: {query}")
-                    else:
-                        all_links.extend(links)
-                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                            arxiv_crawler.fetch_article_and_save2milvus, query, links)))
-                except Exception as e:
-                    logger.error(f"arXiv论文爬取时出错: {query}, {str(e)}", exc_info=True)
-
-            # 微信文章爬取
-            if "weixin" in platforms:
-                try:
-                    wechat_crawler = self.agent.crawler_manager.wechat_crawler
-                    logger.info(f"从微信获取 '{query}' 相关文章")
-                    links = await self._execute_task_with_semaphore(wechat_crawler.parse_sub_url, query)
-                    if not links:
-                        logger.warning(f"无法从微信获取文章: {query}")
-                    else:
-                        all_links.extend(links)
-                        tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                            wechat_crawler.fetch_article_and_save2milvus, query, links)))
-                except Exception as e:
-                    logger.error(f"微信文章爬取时出错: {query}, {str(e)}", exc_info=True)
-
-            # Web搜索获取
-            if "search" in platforms:
-                try:
-                    logger.info(f"使用WebSearcher搜索获取 '{query}' 相关文章")
-                    search_results = await self._execute_task_with_semaphore(self.agent.web_searcher.search, query)
-                    if not search_results:
-                        logger.warning(f"无法通过WebSearcher获取搜索结果: {query}")
-                    else:
-                        links = []
-                        for result in search_results:
-                            if "link" in result and result["link"]:
-                                links.append(result["link"])
-                        if links:
-                            logger.info(f"从WebSearcher获取到 {len(links)} 个有效链接")
-                            all_links.extend(links)
-                            tasks.append(asyncio.create_task(self._execute_task_with_semaphore(
-                                self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, query, links)))
-                        else:
-                            logger.warning(f"搜索结果中没有有效链接: {query}")
-                except Exception as e:
-                    logger.error(f"使用WebSearcher搜索获取文章时出错: {query}, {str(e)}")
-        except Exception as e:
-            logger.error(f"获取爬虫内容时出错: {query}, {str(e)}")
-        
-        # 为空结果记录日志
-        if not all_links:
-            logger.warning(f"未能获取到任何链接: {query}")
-        if not tasks:
-            logger.warning(f"未能生成任何处理任务: {query}")
-            
-        return all_links, tasks
-    
-    async def scheduled_crawl(self, keywords: List[str], platforms: List[str]):
+    async def scheduled_crawl(self, keywords: List[str], scenario: str = None):
         """
         定时执行爬虫任务
         
         Args:
             keywords: 搜索关键词列表
-            platforms: 搜索平台列表
+            scenario: 场景名称
         """
         if not keywords or len(keywords) == 0:
             logger.error("搜索关键词列表为空，无法执行爬虫任务")
             return
+        if not scenario:
+            scenario = self.agent.crawler_manager.config.default_scenario
             
-        if not platforms or len(platforms) == 0:
-            logger.warning("平台列表为空，将使用所有平台")
+        search_url_formats = self.agent.crawler_manager.config.get_search_url_formats(scenario)
+        search_urls = self.agent.crawler_manager.config.get_search_url(scenario)
+
+        if scenario == "healthcare":
+            platforms = ["web_site", "arxiv", "search"]
+        elif scenario == "ai":
             platforms = ["web_site", "github", "arxiv", "weixin", "search"]
+        else:
+            platforms = ["web_site", "search"]
             
         start_time = datetime.now()
-        logger.info(f"开始执行定时爬虫任务，时间: {start_time}, 关键词：{keywords}，平台：{platforms}")
+        logger.info(f"开始执行定时爬虫任务，时间: {start_time}, 关键词：{keywords}，平台：{platforms}, 场景：{scenario}")
         
         all_links = []
         all_tasks = []
-        failed_keywords = []
         
-        # 依次处理每个关键词，避免因一个关键词失败影响整体任务
-        for query in keywords:
+        for keyword in keywords:
             try:
-                logger.info(f"处理关键词: {query}")
-                links, tasks = await self.crawl_content(query, platforms)
-                all_links.extend(links)
-                all_tasks.extend(tasks)
+                logger.info(f"处理关键词: {keyword}, 场景: {scenario}")
                 
-                # 如果没有获取到任何任务，记录该关键词
-                if not tasks:
-                    logger.warning(f"关键词 '{query}' 未生成任何处理任务")
-                    failed_keywords.append(query)
-            except Exception as e:
-                logger.error(f"处理关键词 '{query}' 时出错: {str(e)}", exc_info=True)
-                failed_keywords.append(query)
-        
-        # 处理获取到的任务
-        try:
-            if all_tasks:
-                task_count = len(all_tasks)
-                link_count = len(all_links)
-                logger.info(f"开始处理 {task_count} 个任务，共 {link_count} 个链接")
+                if "web_site" in platforms and search_url_formats:
+                    for search_engine, search_url_format in search_url_formats.items():
+                        try:
+                            encoded_query = quote(keyword)
+                            search_url = search_url_format.format(encoded_query)
+                            logger.info(f"从 {search_engine} 获取 '{keyword}' 相关文章，URL: {search_url}")
+                            
+                            web_crawler = self.agent.crawler_manager.web_crawler
+                            links = await self._execute_task_with_semaphore(web_crawler.parse_sub_url, search_url)
+                            if not links:
+                                logger.warning(f"无法从 {search_url} 获取文章链接: {keyword}")
+                                continue
+                                
+                            all_links.extend(links)
+                            task = asyncio.create_task(self._execute_task_with_semaphore(
+                                web_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
+                            all_tasks.append(task)
+                            logger.info(f"为关键词 '{keyword}' 场景 '{scenario}' 在 {search_engine} 找到 {len(links)} 个链接")
+                        except Exception as e:
+                            logger.error(f"从 {search_engine} 获取文章时出错: {str(e)}")
                 
-                # 设置任务超时保护
-                timeout = 600  # 10分钟超时
-                try:
-                    # 使用asyncio.wait_for添加整体超时保护
-                    results = await asyncio.wait_for(
-                        asyncio.gather(*all_tasks, return_exceptions=True),
-                        timeout=timeout
-                    )
-                    
-                    # 检查执行结果
-                    successful_tasks = 0
-                    exceptions = []
-                    
-                    for i, result in enumerate(results):
-                        if isinstance(result, Exception):
-                            logger.error(f"任务 {i+1}/{task_count} 执行失败: {type(result).__name__}: {str(result)}")
-                            exceptions.append(result)
+                if "web_site" in platforms and search_urls:
+                    logger.info(f"使用场景 '{scenario}' 的自定义URL爬取关键词 '{keyword}'")
+                    task = asyncio.create_task(self._execute_task_with_semaphore(
+                        self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, keyword, search_urls, scenario))
+                    all_tasks.append(task)
+                
+                if "github" in platforms:
+                    try:
+                        logger.info(f"从GitHub获取 '{keyword}' 相关仓库")
+                        github_crawler = self.agent.crawler_manager.github_crawler
+                        links = await self._execute_task_with_semaphore(github_crawler.parse_sub_url, keyword)
+                        if links:
+                            all_links.extend(links)
+                            task = asyncio.create_task(self._execute_task_with_semaphore(
+                                github_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
+                            all_tasks.append(task)
                         else:
-                            successful_tasks += 1
-                    
-                    # 总结执行结果
-                    if exceptions:
-                        logger.warning(f"定时爬虫任务中有 {len(exceptions)}/{task_count} 个任务发生异常")
-                    
-                    logger.info(f"定时爬虫任务完成，成功执行 {successful_tasks}/{task_count} 个任务")
-                    
-                except asyncio.TimeoutError:
-                    logger.error(f"定时爬虫任务执行超时 (超过 {timeout} 秒)，强制终止")
-                    # 注意：此处只记录超时，实际任务仍在后台执行
-            else:
-                logger.warning("定时爬虫任务未生成任何处理任务")
+                            logger.warning(f"无法从 GitHub 获取仓库: {keyword}")
+                    except Exception as e:
+                        logger.error(f"GitHub仓库爬取时出错: {str(e)}")
                 
-            # 记录失败的关键词
-            if failed_keywords:
-                logger.warning(f"以下关键词处理失败或未生成任务: {', '.join(failed_keywords)}")
+                if "arxiv" in platforms:
+                    try:
+                        logger.info(f"从arXiv获取 '{keyword}' 相关论文")
+                        arxiv_crawler = self.agent.crawler_manager.arxiv_crawler
+                        links = await self._execute_task_with_semaphore(arxiv_crawler.parse_sub_url, keyword)
+                        if links:
+                            all_links.extend(links)
+                            task = asyncio.create_task(self._execute_task_with_semaphore(
+                                arxiv_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
+                            all_tasks.append(task)
+                        else:
+                            logger.warning(f"无法从 arXiv 获取文章: {keyword}")
+                    except Exception as e:
+                        logger.error(f"arXiv论文爬取时出错: {str(e)}")
                 
-            # 记录总执行时间
+                if "weixin" in platforms:
+                    try:
+                        logger.info(f"从微信获取 '{keyword}' 相关文章")
+                        wechat_crawler = self.agent.crawler_manager.wechat_crawler
+                        links = await self._execute_task_with_semaphore(wechat_crawler.parse_sub_url, keyword)
+                        if links:
+                            all_links.extend(links)
+                            task = asyncio.create_task(self._execute_task_with_semaphore(
+                                wechat_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
+                            all_tasks.append(task)
+                        else:
+                            logger.warning(f"无法从微信获取文章: {keyword}")
+                    except Exception as e:
+                        logger.error(f"微信文章爬取时出错: {str(e)}")
+                
+                if "search" in platforms:
+                    try:
+                        logger.info(f"使用WebSearcher搜索获取 '{keyword}' 相关文章")
+                        search_results = await self._execute_task_with_semaphore(self.agent.web_searcher.search, keyword)
+                        if search_results:
+                            links = []
+                            for result in search_results:
+                                if "link" in result and result["link"]:
+                                    links.append(result["link"])
+                            if links:
+                                all_links.extend(links)
+                                task = asyncio.create_task(self._execute_task_with_semaphore(
+                                    self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
+                                all_tasks.append(task)
+                                logger.info(f"从WebSearcher获取到 {len(links)} 个有效链接")
+                            else:
+                                logger.warning(f"搜索结果中没有有效链接: {keyword}")
+                        else:
+                            logger.warning(f"无法通过WebSearcher获取搜索结果: {keyword}")
+                    except Exception as e:
+                        logger.error(f"使用WebSearcher搜索获取文章时出错: {str(e)}")
+                
+            except Exception as e:
+                logger.error(f"处理关键词 '{keyword}' 时出错: {str(e)}")
+        
+        if all_tasks:
+            logger.info(f"等待 {len(all_tasks)} 个爬取任务完成...")
+            await asyncio.gather(*all_tasks, return_exceptions=True)
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            logger.info(f"定时爬虫任务执行完成，总耗时: {duration:.2f} 秒")
-            
-        except Exception as e:
-            logger.error(f"执行定时爬虫任务时出错: {str(e)}", exc_info=True)
-            
-    def start_scheduled_crawl(self, keywords: List[str], platforms: List[str]):
+            logger.info(f"爬取任务已完成，共处理 {len(all_links)} 个链接，耗时 {duration:.2f} 秒")
+        else:
+            logger.warning("没有生成任何爬取任务")
+        
+    def start_scheduled_crawl(self, keywords: List[str], scenario: str = None):
         """
-        启动定时爬虫任务，每天凌晨2点和下午2点各执行一次
+        启动定时爬虫任务，不同场景在不同时间执行
         
         Args:
             keywords: 搜索关键词列表
-            platforms: 搜索平台列表
+            scenario: 指定的场景，如 "ai" 或 "healthcare"，为None时使用全部场景
         """
         if not self.scheduler.running:
-            # 添加定时任务，每天凌晨2点执行
+            # 为特定场景添加定时任务
+            if scenario not in self.agent.crawler_manager.config.supported_scenarios:
+                logger.warning(f"不支持的场景: {scenario}，使用默认场景")
+                scenario = self.agent.crawler_manager.config.default_scenario
+            
+            # 根据场景选择时间
+            hour = 0
+            if scenario == "general":
+                hour = 0  # 通用场景早上0点
+            elif scenario == "healthcare":
+                hour = 1  # 医疗健康场景早上1点
+            elif scenario == "ai":
+                hour = 4  # AI场景早上4点
+            
             self.scheduler.add_job(
                 self.scheduled_crawl,
-                CronTrigger(hour=2, minute=0),
-                args=[keywords, platforms],
-                id='crawl_task_morning',
+                CronTrigger(hour=hour, minute=0),
+                args=[keywords, scenario],
+                id=f'crawl_task_{scenario}',
                 replace_existing=True
             )
             
-            # 添加定时任务，每天下午2点执行
-            self.scheduler.add_job(
-                self.scheduled_crawl,
-                CronTrigger(hour=14, minute=0),
-                args=[keywords, platforms],
-                id='crawl_task_afternoon',
-                replace_existing=True
-            )
+            logger.info(f"已为场景 '{scenario}' 添加定时任务，执行时间: 每天{hour}:00")
             
             # 启动调度器
             self.scheduler.start()
             self.running = True
-            logger.info(f"已启动定时爬虫任务，关键词：{keywords}，平台：{platforms}")
             return True
         else:
             logger.info("调度器已在运行中")
             return False
-            
+
     def stop_scheduled_crawl(self):
         """
         停止定时爬虫任务
@@ -336,8 +247,8 @@ class ScheduledCrawler:
             bool: 是否成功停止
         """
         if self.scheduler.running:
-            self.scheduler.remove_job('crawl_task_morning')
-            self.scheduler.remove_job('crawl_task_afternoon')
+            self.scheduler.remove_job('crawl_task_ai')
+            self.scheduler.remove_job('crawl_task_healthcare')
             self.scheduler.shutdown()
             self.running = False
             logger.info("已停止定时爬虫任务")
@@ -346,27 +257,28 @@ class ScheduledCrawler:
             logger.info("调度器未在运行")
             return False
             
-    async def run_crawl_now(self, keywords: List[str], platforms: List[str]):
+    async def run_crawl_now(self, keywords: List[str], scenario: str = None):
         """
         立即执行一次爬虫任务
         
         Args:
             keywords: 搜索关键词列表
-            platforms: 搜索平台列表
+            scenario: 场景名称
         """
-        logger.info(f"立即执行爬虫任务，关键词：{keywords}，平台：{platforms}")
-        await self.scheduled_crawl(keywords, platforms)
+        logger.info(f"立即执行爬虫任务，关键词：{keywords}，场景：{scenario}")
+        await self.scheduled_crawl(keywords, scenario)
 
 # 全局实例，用于命令行调用
 scheduler_instance = None
 
-async def start_scheduler(keywords: List[str], platforms: List[str], run_now: bool = False):
+async def start_scheduler(keywords: List[str], scenario: str = None, run_now: bool = False):
     """
     启动定时任务调度器
     
     Args:
         keywords: 搜索关键词列表
-        platforms: 搜索平台列表
+        scenario: 场景名称
+        all_scenarios: 是否启动所有支持的场景
         run_now: 是否立即执行一次
     """
     global scheduler_instance
@@ -374,13 +286,13 @@ async def start_scheduler(keywords: List[str], platforms: List[str], run_now: bo
     if scheduler_instance is None:
         scheduler_instance = ScheduledCrawler()
     
-    # 启动定时任务（2点和14点）
-    scheduler_instance.start_scheduled_crawl(keywords, platforms)
+    # 启动定时任务
+    scheduler_instance.start_scheduled_crawl(keywords, scenario)
     
     # 如果需要，立即执行一次
     if run_now:
         logger.info("立即执行一次爬虫任务")
-        await scheduler_instance.run_crawl_now(keywords, platforms)
+        await scheduler_instance.run_crawl_now(keywords, scenario)
     
     return scheduler_instance
 
