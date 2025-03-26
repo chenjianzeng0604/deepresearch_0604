@@ -682,7 +682,7 @@ class ContentQualityClassifier:
     """
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_length = 3000
+        self.max_length = 10000
         self.quality_threshold = 0.5
         
         cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_models")
