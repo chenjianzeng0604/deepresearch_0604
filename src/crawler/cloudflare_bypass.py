@@ -15,7 +15,6 @@ class CloudflareBypass:
         self.page = page
         self.captcha_api_key = os.getenv("2CAPTCHA_API_KEY")
         self.max_retries = 2
-        self.cloudflare_bypass_post_submit_wait = int(os.getenv("CLOUDFLARE_BYPASS_POST_SUBMIT_WAIT", 20000))
         self.cloudflare_bypass_wait_for_timeout = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT", 5000))
         self.cloudflare_bypass_wait_for_load_state = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_LOAD_STATE", 10000))
 
@@ -27,7 +26,7 @@ class CloudflareBypass:
         for attempt in range(self.max_retries):
             try:
                 if not await self._detect_challenge():
-                    return await self.page.content()
+                    return await self.page.inner_html("body")
 
                 challenge_type = await self._get_challenge_type()
                 if challenge_type == "turnstile":
@@ -38,15 +37,14 @@ class CloudflareBypass:
                     success = await self._solve_auto_verify()
 
                 if success:
-                    await self._post_submit_wait()
-                    return await self.page.content()
+                    return await self.page.inner_html("body")
 
                 await self._rotate_proxy()
             except Exception as e:
                 logger.warning(f"处理Cloudflare验证流程时出错 (尝试 {attempt+1}/{self.max_retries}): {str(e)}")
 
         try: 
-            return await self.page.content()
+            return await self.page.inner_html("body")
         except Exception as final_error:
             logger.warning(f"最终获取页面内容失败: {str(final_error)}")
             return None
@@ -263,12 +261,6 @@ class CloudflareBypass:
         except Exception as e:
             logger.warning(f"随机点击时出错: {str(e)}")
             # 继续执行，不抛出异常
-
-    async def _post_submit_wait(self):
-        """提交后的等待策略"""
-        await self.page.wait_for_timeout(self.cloudflare_bypass_wait_for_timeout)
-        if await self.page.query_selector("text=Just a moment..."):
-            await self.page.wait_for_load_state("networkidle", timeout=self.cloudflare_bypass_post_submit_wait)
 
     async def _rotate_proxy(self):
         """切换代理"""

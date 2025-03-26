@@ -27,11 +27,8 @@ from src.utils.llm_client import LLMClient
 from datetime import datetime, timezone
 from src.crawler.config import CrawlerConfig
 import re
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM, AutoModelForSequenceClassification
 import torch
-import torch.nn.functional as F
-import numpy as np
-from playwright_stealth import stealth_async
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +115,7 @@ class WebCrawler:
             
             # 搜索引擎特定页面
             'www.bing.com/images/search', 'google.com/imgres',
-            'search?', 'search/', '/search', 'query=',
+            'search?', 'search/', '/search', 'query=', 'www.google.com/maps/search',
             
             # 社交媒体分享链接
             'facebook.com/sharer', 'twitter.com/intent', 'linkedin.com/share',
@@ -487,7 +484,7 @@ class WebCrawler:
             if useProxy:
                 logger.info(f"Fetching URL {url} with proxy")
                 browser = await p.chromium.launch(
-                    headless=True,
+                    headless=False,
                     proxy=self.proxies,
                     args=[
                        "--disable-blink-features=AutomationControlled",
@@ -506,7 +503,7 @@ class WebCrawler:
             else:
                 logger.info(f"Fetching URL {url} without proxy")
                 browser = await p.chromium.launch(
-                    headless=True,
+                    headless=False,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
@@ -551,8 +548,6 @@ class WebCrawler:
 
                 page = await context.new_page()
 
-                await stealth_async(page)
-
                 await page.route("**/*", lambda route: route.abort() 
                     if route.request.resource_type in {"image", "media", "stylesheet", "font"}
                     else route.continue_()
@@ -560,7 +555,7 @@ class WebCrawler:
 
                 await page.goto(
                     url, 
-                    wait_until="networkidle", 
+                    wait_until="domcontentloaded", 
                     timeout=self.crawler_fetch_url_timeout * 1000
                 )
 
@@ -569,20 +564,21 @@ class WebCrawler:
                     # 先尝试模拟人类交互
                     await cloudflare_bypass.simulate_human_interaction()
                     # 然后处理Cloudflare挑战
-                    text = await cloudflare_bypass.handle_cloudflare()
+                    html = await cloudflare_bypass.handle_cloudflare()
                 except Exception as e:
                     logger.warning(f"Cloudflare绕过过程中出错: {str(e)}")
                     # 即使出错也尝试获取页面内容
                     try:
-                        text = await page.content()
+                        html = await page.inner_html("body")
                     except Exception as content_error:
                         logger.error(f"获取页面内容失败: {str(content_error)}")
-                        text = None
-                if text:
+                        html = None
+                if html:
+                    text = await page.inner_text("body")
                     is_high_quality, score = quality_classifier.predict_quality(text)
                     if is_high_quality:
                         logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
-                        return text
+                        return html
                     else:
                         logger.warning(f"过滤低质量内容 (分数: {score:.2f}): {url}")
                         return None
@@ -686,50 +682,60 @@ class ContentQualityClassifier:
     """
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_length = 512
-        self.quality_threshold = 0.7  # 质量阈值，高于此值的内容被视为高质量
+        self.max_length = 3000
+        self.quality_threshold = 0.5
         
         cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_models")
         os.makedirs(cache_dir, exist_ok=True)
 
-        # 加载模型和分词器
-        try:
-            snapshot_dir = os.path.join(
-                cache_dir,
-                "models--distilbert-base-uncased",
-                "snapshots",
-                os.listdir(f"{cache_dir}/models--distilbert-base-uncased/snapshots")[0]
-            )
-            logger.info(f"尝试从本地加载模型: {snapshot_dir}")
-            self.tokenizer = AutoTokenizer.from_pretrained(snapshot_dir)
-            self.model = AutoModelForSequenceClassification.from_pretrained(snapshot_dir, num_labels=2)
-            self.model.to(self.device)
-            self.model.eval()
-            
-            logger.info("初始化内容质量分类器完成 (使用通用BERT模型)")
-        except Exception as e:
-            logger.error(f"初始化内容质量分类器失败: {str(e)}")
-            self.tokenizer = None
-            self.model = None
+        snapshot_dir_cn = os.path.join(
+            cache_dir,
+            "models--hfl--chinese-roberta-wwm-ext",
+            "snapshots",
+            os.listdir(f"{cache_dir}/models--hfl--chinese-roberta-wwm-ext/snapshots")[0]
+        )
+        logger.info(f"尝试从本地加载中文友好分类模型: {snapshot_dir_cn}")
+        self.tokenizer_cn = AutoTokenizer.from_pretrained(snapshot_dir_cn)
+        self.model_cn = AutoModelForMaskedLM.from_pretrained(snapshot_dir_cn)
+        self.model_cn.to(self.device)
+        self.model_cn.eval()
+        self.classifier_cn = pipeline(
+            "zero-shot-classification", 
+            model=self.model_cn,
+            tokenizer=self.tokenizer_cn, 
+            device=self.device,
+            max_length=self.max_length,
+            candidate_labels=["low", "high"]
+        )
+
+        snapshot_dir_en = os.path.join(
+            cache_dir,
+            "models--FacebookAI--xlm-roberta-large",
+            "snapshots",
+            os.listdir(f"{cache_dir}/models--FacebookAI--xlm-roberta-large/snapshots")[0]
+        )
+        logger.info(f"尝试从本地加载英文友好分类模型: {snapshot_dir_en}")
+        self.tokenizer_en = AutoTokenizer.from_pretrained(snapshot_dir_en)
+        self.model_en = AutoModelForMaskedLM.from_pretrained(snapshot_dir_en)
+        self.model_en.to(self.device)
+        self.model_en.eval()
+        self.classifier_en = pipeline(
+            "zero-shot-classification", 
+            model=self.model_en,
+            tokenizer=self.tokenizer_en, 
+            device=self.device,
+            max_length=self.max_length,
+            candidate_labels=["low", "high"]
+        )
     
     def _preprocess_text(self, text):
         """预处理文本，提取有意义的内容片段"""
         if not text:
             return ""
-            
         # 移除HTML标签
         text = re.sub(r'<[^>]+>', ' ', text)
-        
         # 移除多余空白字符
         text = re.sub(r'\s+', ' ', text)
-        
-        # 提取最有意义的片段（文本开头、中间和结尾）
-        if len(text) > self.max_length * 3:
-            start = text[:self.max_length]
-            middle_start = len(text) // 2 - self.max_length // 2
-            middle = text[middle_start:middle_start + self.max_length]
-            end = text[-self.max_length:]
-            return start + " " + middle + " " + end
         return text
     
     def predict_quality(self, text):
@@ -746,32 +752,20 @@ class ContentQualityClassifier:
         if self._rule_based_filter(text):
             return False, 0.0
         
-        # 如果没有模型，回退到规则过滤
-        if self.tokenizer is None or self.model is None:
-            return not self._rule_based_filter(text), 0.5
-        
         try:
             processed_text = self._preprocess_text(text)
-            
-            # 使用BERT模型进行分类
-            inputs = self.tokenizer(
-                processed_text, 
-                truncation=True, 
-                padding=True, 
-                max_length=self.max_length,
-                return_tensors="pt"
-            ).to(self.device)
-            
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                probabilities = torch.nn.functional.softmax(outputs.logits, dim=1)
-                quality_score = probabilities[0][1].item()  # 高质量的概率
-            
-            is_high_quality = quality_score > self.quality_threshold
+            result = self.classifier_cn(processed_text)
+            quality_score = result['scores'][result['labels'].index("high")]
+            is_high_quality = quality_score >= self.quality_threshold
+            logger.info(f"中文质量预测结果: {is_high_quality}, 分数: {quality_score}")
+            if not is_high_quality:
+                result = self.classifier_en(processed_text)
+                quality_score = result['scores'][result['labels'].index("high")]
+                is_high_quality = quality_score >= self.quality_threshold
+                logger.info(f"英文质量预测结果: {is_high_quality}, 分数: {quality_score}")
             return is_high_quality, quality_score
         except Exception as e:
             logger.error(f"预测内容质量时出错: {str(e)}")
-            # 出错时默认为高质量，避免过滤掉潜在有用内容
             return True, 0.5
     
     def _rule_based_filter(self, text):
@@ -794,45 +788,32 @@ class ContentQualityClassifier:
             return True
             
         # 规则3: 检测垃圾内容标志
-        spam_phrases = [
+        keywords = [
             'click here', 'buy now', 'limited offer', 'free download',
-            'make money', 'earn cash', '点击这里', '立即购买', '限时优惠'
+            'make money', 'earn cash', '点击这里', '立即购买', '限时优惠',
+            "免费领取", "限时优惠", "点击下载", "立即注册", 
+            "v信", "加微", "低价出售", "【广告】"
         ]
-        spam_count = sum(1 for phrase in spam_phrases if phrase.lower() in text.lower())
-        if spam_count > 3:
+        lower_text = text.lower()
+        if any(keyword in lower_text for keyword in keywords):
             return True
-            
-        return False
-    
-    def _heuristic_quality_check(self, text):
-        """基于启发式方法的质量评估"""
-        if not text:
-            return False, 0.0
-            
-        # 1. 计算内容长度得分 (0-0.3)
-        length = len(text)
-        length_score = min(0.3, length / 2000)
-        
-        # 2. 计算段落结构得分 (0-0.2)
-        paragraphs = text.split('\n\n')
-        structure_score = min(0.2, len(paragraphs) / 20)
-        
-        # 3. 评估内容信息密度 (0-0.3)
-        info_keywords = [
-            'research', 'study', 'analysis', 'method', 'result', 'conclusion',
-            '研究', '分析', '方法', '结果', '结论', 'data', '数据', 'algorithm', '算法'
+
+        # 检测反爬验证页面
+        captcha_patterns = [
+            "detected unusual traffic",
+            "systems have detected unusual",
+            "IP address:",
+            "This page checks",
+            "see if it's really you",
+            "not a robot",
+            "Why did this happen"
         ]
-        keyword_count = sum(1 for keyword in info_keywords if keyword.lower() in text.lower())
-        info_score = min(0.3, keyword_count / 10)
+        text_lower = text.lower()
+        for pattern in captcha_patterns:
+            if pattern.lower() in text_lower:
+                logger.info("检测到反爬验证页面，已过滤")
+                return True
         
-        # 4. 关键词多样性 (0-0.2)
-        words = text.split()
-        diversity_score = min(0.2, len(set(words)) / max(len(words), 1))
-        
-        # 计算总分
-        total_score = length_score + structure_score + info_score + diversity_score
-        is_high_quality = total_score > 0.6
-        
-        return is_high_quality, total_score
+        return False
 
 quality_classifier = ContentQualityClassifier()
