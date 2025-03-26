@@ -484,7 +484,7 @@ class WebCrawler:
             if useProxy:
                 logger.info(f"Fetching URL {url} with proxy")
                 browser = await p.chromium.launch(
-                    headless=False,
+                    headless=True,
                     proxy=self.proxies,
                     args=[
                        "--disable-blink-features=AutomationControlled",
@@ -503,7 +503,7 @@ class WebCrawler:
             else:
                 logger.info(f"Fetching URL {url} without proxy")
                 browser = await p.chromium.launch(
-                    headless=False,
+                    headless=True,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
