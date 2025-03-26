@@ -682,7 +682,7 @@ class ContentQualityClassifier:
     """
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_length = 10000
+        self.max_length = 512
         self.quality_threshold = 0.5
         
         cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_models")
@@ -705,6 +705,7 @@ class ContentQualityClassifier:
             tokenizer=self.tokenizer_cn, 
             device=self.device,
             max_length=self.max_length,
+            truncation=True,
             candidate_labels=["low", "high"]
         )
 
@@ -725,6 +726,7 @@ class ContentQualityClassifier:
             tokenizer=self.tokenizer_en, 
             device=self.device,
             max_length=self.max_length,
+            truncation=True,
             candidate_labels=["low", "high"]
         )
     
