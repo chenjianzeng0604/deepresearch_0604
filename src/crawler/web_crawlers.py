@@ -245,7 +245,7 @@ class WebCrawler:
         if not links_to_fetch:
             return []
         
-        results = await self.fetch_article(query, links_to_fetch, scenario)
+        results = await self.fetch_article(links_to_fetch)
         await self.save_article(results, scenario)
         return results
 
@@ -458,18 +458,6 @@ class WebCrawler:
         :return: 切割后的子字符串数组
         """
         return [s[i:i+length] for i in range(0, len(s), length)]
-
-    async def _generate_summary(self, query: str, content: str) -> str:
-        if not content or len(content.strip()) == 0:
-            return ""
-        try:
-            summary_analysis_prompt = PromptTemplates.format_summary_analysis_prompt(query, content)
-            summary = await self.llm_client.generate(summary_analysis_prompt)
-            logger.info(f"生成摘要: {summary}")
-            return summary
-        except Exception as e:
-            logger.error(f"生成摘要时出错: {str(e)}", exc_info=True)
-            return ""
     
     def is_pdf_url(self, url: str) -> bool:
         return '/pdf/' in url
@@ -625,9 +613,13 @@ class WebCrawler:
             return None
         finally:
             try:
+                await context.close()
+            except Exception as context_error:
+                logger.warning(f"关闭浏览器上下文失败: {str(context_error)}")
+            try:
                 await browser.close()
             except Exception as browser_error:
-                logger.error(f"关闭浏览器失败: {str(browser_error)}")
+                logger.warning(f"关闭浏览器失败: {str(browser_error)}")
 
     def parse_html(self, html_content: str) -> Optional[BeautifulSoup]:
         """
