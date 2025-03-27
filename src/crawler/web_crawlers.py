@@ -554,72 +554,73 @@ class WebCrawler:
                     color_scheme="dark"
                 )
 
-                await context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    })
-                    window.generateMouseMove = () => {
-                        const path = Array.from({length: 20}, () => ({
-                            x: Math.random() * window.innerWidth,
-                            y: Math.random() * window.innerHeight,
-                            duration: Math.random() * 300 + 200
-                        }))
-                        path.forEach(p => {
-                            window.dispatchEvent(new MouseEvent('mousemove', p))
-                        })
-                    }
-                """)
-
-                page = await context.new_page()
-
-                await page.route("**/*", lambda route: route.abort() 
-                    if route.request.resource_type in {"image", "media", "stylesheet", "font"}
-                    else route.continue_()
-                )
-
-                await page.goto(
-                    url, 
-                    wait_until="domcontentloaded", 
-                    timeout=self.crawler_fetch_url_timeout * 1000
-                )
-
-                cloudflare_bypass = CloudflareBypass(page)
                 try:
-                    # 先尝试模拟人类交互
-                    await cloudflare_bypass.simulate_human_interaction()
-                    # 然后处理Cloudflare挑战
-                    html = await cloudflare_bypass.handle_cloudflare()
-                except Exception as e:
-                    logger.warning(f"Cloudflare绕过过程中出错: {str(e)}")
-                    # 即使出错也尝试获取页面内容
+                    await context.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        })
+                        window.generateMouseMove = () => {
+                            const path = Array.from({length: 20}, () => ({
+                                x: Math.random() * window.innerWidth,
+                                y: Math.random() * window.innerHeight,
+                                duration: Math.random() * 300 + 200
+                            }))
+                            path.forEach(p => {
+                                window.dispatchEvent(new MouseEvent('mousemove', p))
+                            })
+                        }
+                    """)
+
+                    page = await context.new_page()
+
+                    await page.route("**/*", lambda route: route.abort() 
+                        if route.request.resource_type in {"image", "media", "stylesheet", "font"}
+                        else route.continue_()
+                    )
+
+                    await page.goto(
+                        url, 
+                        wait_until="domcontentloaded", 
+                        timeout=self.crawler_fetch_url_timeout * 1000
+                    )
+
+                    cloudflare_bypass = CloudflareBypass(page)
                     try:
-                        html = await page.inner_html("body")
-                    except Exception as content_error:
-                        logger.error(f"获取页面内容失败: {str(content_error)}")
-                        html = None
-                if html:
-                    text = await page.inner_text("body")
-                    is_high_quality, score = quality_classifier.predict_quality(text)
-                    if is_high_quality:
-                        logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
-                        return html
+                        # 先尝试模拟人类交互
+                        await cloudflare_bypass.simulate_human_interaction()
+                        # 然后处理Cloudflare挑战
+                        html = await cloudflare_bypass.handle_cloudflare()
+                    except Exception as e:
+                        logger.warning(f"Cloudflare绕过过程中出错: {str(e)}")
+                        # 即使出错也尝试获取页面内容
+                        try:
+                            html = await page.inner_html("body")
+                        except Exception as content_error:
+                            logger.error(f"获取页面内容失败: {str(content_error)}")
+                            html = None
+                    if html:
+                        text = await page.inner_text("body")
+                        is_high_quality, score = quality_classifier.predict_quality(text)
+                        if is_high_quality:
+                            logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
+                            return html
+                        else:
+                            logger.warning(f"过滤低质量内容 (分数: {score:.2f}): {url}")
+                            return None
                     else:
-                        logger.warning(f"过滤低质量内容 (分数: {score:.2f}): {url}")
                         return None
-                else:
-                    return None
+                finally:
+                    try:
+                        await context.close()
+                    except Exception as context_error:
+                        logger.warning(f"关闭浏览器上下文失败: {str(context_error)}")
+                    try:
+                        await browser.close()
+                    except Exception as browser_error:
+                        logger.warning(f"关闭浏览器失败: {str(browser_error)}")
         except Exception as e:
             logger.error(f"获取页面内容失败: {str(e)}")
             return None
-        finally:
-            try:
-                await context.close()
-            except Exception as context_error:
-                logger.warning(f"关闭浏览器上下文失败: {str(context_error)}")
-            try:
-                await browser.close()
-            except Exception as browser_error:
-                logger.warning(f"关闭浏览器失败: {str(browser_error)}")
 
     def parse_html(self, html_content: str) -> Optional[BeautifulSoup]:
         """
