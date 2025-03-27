@@ -131,6 +131,38 @@ class DeepresearchAgent:
             logger.info(f"开始第 {current_iteration}/{max_iterations} 轮信息检索")
             try:
                 iteration_results = []
+            
+                if collection_name:
+                    milvus_contents = self.milvus_dao.search(
+                        collection_name=collection_name,
+                        data=self.milvus_dao.generate_embeddings(refined_queries),
+                        limit=self.vectordb_limit,
+                        output_fields=["id", "url", "content", "create_time"]
+                    )
+                    
+                    milvus_unique_contents = {}
+                    temp_urls_seen = set()
+                    for query_contents in milvus_contents:
+                        if not query_contents:
+                            continue
+                        for contents in query_contents:
+                            entity = contents['entity']
+                            if (isinstance(entity, dict) and 
+                                'content' in entity and 
+                                entity['content'] and 
+                                len(entity['content'].strip()) > 0 and 
+                                'url' in entity and 
+                                entity['url'] not in all_urls_seen):
+                                milvus_unique_contents[entity['url']] = entity
+                                temp_urls_seen.add(entity['url'])
+                        all_urls_seen.update(temp_urls_seen)
+                        temp_urls_seen.clear()
+                    
+                    milvus_results = list(milvus_unique_contents.values())
+                    if milvus_results:
+                        iteration_results.extend(milvus_results)
+                        logger.info(f"从Milvus知识库集合 {collection_name} 获取到 {len(milvus_results)} 条新结果")
+
                 tasks = []
                 for query in refined_queries:
                     try:
@@ -148,7 +180,7 @@ class DeepresearchAgent:
                                     continue
                                 links = [link for link in links if link not in all_urls_seen]
                                 all_urls_seen.update(links)
-                                task = asyncio.create_task(web_crawler.fetch_article_and_save2milvus(query, links, scenario))
+                                task = asyncio.create_task(web_crawler.fetch_article(links))
                                 tasks.append(task)
                                 logger.info(f"为查询 '{query}' 找到 {len(links)} 个新链接")
                             except Exception as e:
@@ -168,43 +200,16 @@ class DeepresearchAgent:
                                     result['content'] and 
                                     len(result['content'].strip()) > 0 and 
                                     'url' in result and 
-                                    result['url'] not in [item.get('url') for item in all_results] and
-                                    result['url'] not in [item.get('url') for item in iteration_results]):
+                                    result['url'] not in all_urls_seen):
                                     search_unique_contents[result['url']] = result
+                                    all_urls_seen.add(result['url'])
                             search_results = list(search_unique_contents.values())
                             if search_results:
                                 iteration_results.extend(search_results)
+                                web_crawler.save_article(search_results, scenario)
                                 logger.info(f"从搜索引擎获取到 {len(search_results)} 条新结果")
                     except Exception as e:
                         logger.error(f"爬取搜索结果时出错: {str(e)}", exc_info=True)
-                
-                if collection_name:
-                    milvus_contents = self.milvus_dao.search(
-                        collection_name=collection_name,
-                        data=self.milvus_dao.generate_embeddings(refined_queries),
-                        limit=self.vectordb_limit,
-                        output_fields=["id", "url", "content", "create_time"]
-                    )
-                    
-                    milvus_unique_contents = {}
-                    for query_contents in milvus_contents:
-                        if not query_contents:
-                            continue
-                        for contents in query_contents:
-                            entity = contents['entity']
-                            if (isinstance(entity, dict) and 
-                                'content' in entity and 
-                                entity['content'] and 
-                                len(entity['content'].strip()) > 0 and 
-                                'url' in entity and 
-                                entity['url'] not in [item.get('url') for item in all_results] and
-                                entity['url'] not in [item.get('url') for item in iteration_results]):
-                                milvus_unique_contents[entity['url']] = entity
-                    
-                    milvus_results = list(milvus_unique_contents.values())
-                    if milvus_results:
-                        iteration_results.extend(milvus_results)
-                        logger.info(f"从Milvus知识库集合 {collection_name} 获取到 {len(milvus_results)} 条新结果")
                 
                 if iteration_results:
                     all_results.extend(iteration_results)

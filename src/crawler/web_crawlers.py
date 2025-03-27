@@ -27,7 +27,7 @@ from src.utils.llm_client import LLMClient
 from datetime import datetime, timezone
 from src.crawler.config import CrawlerConfig
 import re
-from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM, AutoModelForSequenceClassification
+from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM
 import torch
 
 logger = logging.getLogger(__name__)
@@ -241,13 +241,22 @@ class WebCrawler:
             logger.warning(f"没有有效链接可爬取，查询：{query}")
             return []
         
+        links_to_fetch = await self.filterSavedUrl(links, scenario)
+        if not links_to_fetch:
+            return []
+        
+        results = await self.fetch_article(query, links_to_fetch, scenario)
+        await self.save_article(results, scenario)
+        return results
+
+    async def filterSavedUrl(self, links, scenario: str = None):
         # 获取场景对应的Milvus集合名称
         collection_name = self.crawler_config.get_collection_name(scenario)
         if not collection_name:
             logger.warning(f"未找到场景 {scenario} 对应的Milvus集合名称")
             return []
             
-        logger.info(f"爬取 {query} 的内容，场景: {scenario}, 集合: {collection_name}")
+        logger.info(f"过滤已存在URL，场景: {scenario}, 集合: {collection_name}")
         
         # 将链接按批次处理，避免查询字符串过长
         batch_size = 50
@@ -272,15 +281,27 @@ class WebCrawler:
                 logger.error(f"查询Milvus中的已存在URL失败: {str(e)}")
                 # 继续执行，不阻断进程
 
-        # 过滤掉已经存在的链接
         links_to_fetch = [link for link in unique_links if link not in all_existing_urls]
         if not links_to_fetch:
-            logger.info(f"所有链接 ({len(unique_links)}) 已存在于数据库中，无需重新爬取")
+            logger.info(f"所有链接 ({len(unique_links)}) 已存在于数据库中，无需重新处理")
             return []
             
-        logger.info(f"将爬取 {len(links_to_fetch)}/{len(unique_links)} 个链接 (过滤掉 {len(all_existing_urls)} 个已存在链接)")
+        logger.info(f"将处理{len(links_to_fetch)}/{len(unique_links)} 个链接 (过滤掉 {len(all_existing_urls)} 个已存在链接)")
+        return links_to_fetch
 
-        rows = 0
+    async def fetch_article(self, links: List[str]) -> List[str]:
+        """
+        获取文章内容并保存到Milvus
+        
+        Args:
+            links: 链接列表
+        Returns:
+            List[str]: 处理结果
+        """
+        if not links or len(links) == 0:
+            logger.warning(f"没有有效链接可爬取")
+            return []
+
         sem = asyncio.Semaphore(self.crawler_fetch_article_with_semaphore)
         async def fetch_article_with_semaphore(link):
             try:
@@ -303,92 +324,11 @@ class WebCrawler:
                 return {"url": link, "content": "", "error": str(e)}
         
         # 限制最大并行爬取数量，避免过载
-        links_to_process = links_to_fetch[:min(self.crawler_max_links_result, len(links_to_fetch))]
+        links_to_process = links[:min(self.crawler_max_links_result, len(links))]
         tasks = [fetch_article_with_semaphore(link) for link in links_to_process]
 
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 按批次处理和保存数据，避免单次操作过大
-            batch_size = 5
-            current_batch = []
-            
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.error(f"获取文章信息时发生错误: {str(result)}")
-                    continue
-                
-                if not result or 'url' not in result:
-                    logger.warning(f"获取的结果格式不正确: {result}")
-                    continue
-                    
-                if 'error' in result and result['error']:
-                    logger.warning(f"获取文章 {result['url']} 失败: {result['error']}")
-                    continue
-                    
-                if not result['content'] or len(result['content'].strip()) == 0:
-                    logger.warning(f"获取的文章内容为空: {result['url']}")
-                    continue
-                
-                try:
-                    schema, index_params = MilvusSchemaManager.get_deepresearch_schema()
-                    contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
-                    
-                    for content in contents:
-                        if not content or len(content.strip()) == 0:
-                            continue
-                            
-                        try:
-                            content_embs = self.milvus_dao.generate_embeddings([content])
-                            if not content_embs or len(content_embs) == 0:
-                                logger.warning(f"为内容生成嵌入向量失败: {result['url']}")
-                                continue
-                                
-                            data_item = {
-                                "id": str(uuid.uuid4()),
-                                "url": result['url'],
-                                "content": content,
-                                "content_emb": content_embs[0],
-                                "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
-                            }
-                            
-                            current_batch.append(data_item)
-                            
-                            # 当达到批次大小时，处理并清空当前批次
-                            if len(current_batch) >= batch_size:
-                                try:
-                                    success = await self.batch_save_to_milvus(
-                                        collection_name=collection_name, 
-                                        schema=schema, 
-                                        index_params=index_params, 
-                                        data=current_batch
-                                    )
-                                    if success:
-                                        rows += len(current_batch)
-                                    await asyncio.sleep(1)
-                                except Exception as e:
-                                    logger.error(f"写入Milvus失败: {str(e)}")
-                                current_batch = []
-                        
-                        except Exception as e:
-                            logger.error(f"处理内容块时出错: {str(e)}")
-                
-                except Exception as e:
-                    logger.error(f"处理文章时出错: {result['url']}, {str(e)}")
-            
-            # 确保最后的批次也被处理
-            if current_batch:
-                success = await self.batch_save_to_milvus(
-                    collection_name=collection_name, 
-                    schema=schema, 
-                    index_params=index_params, 
-                    data=current_batch
-                )
-                if success:
-                    rows += len(current_batch)
-                await asyncio.sleep(1)
-        
-            logger.info(f"成功写入{rows}行数据到集合 {collection_name}，从{len(links_to_process)}个链接")
             return results
         except asyncio.CancelledError:
             logger.warning("爬取任务被取消")
@@ -396,6 +336,103 @@ class WebCrawler:
         except Exception as e:
             logger.error(f"获取文章信息时发生错误: {str(e)}")
             return []
+
+    async def save_article(self, results, scenario: str = None):
+        # 按批次处理和保存数据，避免单次操作过大
+        batch_size = 5
+        current_batch = []
+        rows = 0
+
+        # 获取场景对应的Milvus集合名称
+        collection_name = self.crawler_config.get_collection_name(scenario)
+        if not collection_name:
+            logger.warning(f"未找到场景 {scenario} 对应的Milvus集合名称")
+            return
+
+        links = [r["url"] for r in results if r and "url" in r]
+        links_to_save = await self.filterSavedUrl(links, scenario)
+        if not links_to_save:
+            logger.warning(f"没有需要保存的文章，场景：{scenario}")
+            return
+
+        results = [r for r in results if r["url"] in links_to_save]
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"获取文章信息时发生错误: {str(result)}")
+                continue
+            
+            if not result or 'url' not in result:
+                logger.warning(f"获取的结果格式不正确: {result}")
+                continue
+                
+            if 'error' in result and result['error']:
+                logger.warning(f"获取文章 {result['url']} 失败: {result['error']}")
+                continue
+                
+            if not result['content'] or len(result['content'].strip()) == 0:
+                logger.warning(f"获取的文章内容为空: {result['url']}")
+                continue
+            
+            try:
+                schema, index_params = MilvusSchemaManager.get_deepresearch_schema()
+                contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
+                
+                for content in contents:
+                    if not content or len(content.strip()) == 0:
+                        continue
+                        
+                    try:
+                        content_embs = self.milvus_dao.generate_embeddings([content])
+                        if not content_embs or len(content_embs) == 0:
+                            logger.warning(f"为内容生成嵌入向量失败: {result['url']}")
+                            continue
+                            
+                        data_item = {
+                            "id": str(uuid.uuid4()),
+                            "url": result['url'],
+                            "content": content,
+                            "content_emb": content_embs[0],
+                            "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
+                        }
+                        
+                        current_batch.append(data_item)
+                        
+                        # 当达到批次大小时，处理并清空当前批次
+                        if len(current_batch) >= batch_size:
+                            try:
+                                success = await self.batch_save_to_milvus(
+                                    collection_name=collection_name, 
+                                    schema=schema, 
+                                    index_params=index_params, 
+                                    data=current_batch
+                                )
+                                if success:
+                                    rows += len(current_batch)
+                                await asyncio.sleep(1)
+                            except Exception as e:
+                                logger.error(f"写入Milvus失败: {str(e)}")
+                            current_batch = []
+                    
+                    except Exception as e:
+                        logger.error(f"处理内容块时出错: {str(e)}")
+            
+            except Exception as e:
+                logger.error(f"处理文章时出错: {result['url']}, {str(e)}")
+        
+        # 确保最后的批次也被处理
+        if current_batch:
+            success = await self.batch_save_to_milvus(
+                collection_name=collection_name, 
+                schema=schema, 
+                index_params=index_params, 
+                data=current_batch
+            )
+            if success:
+                rows += len(current_batch)
+            await asyncio.sleep(1)
+    
+        logger.info(f"成功写入{rows}行数据到集合 {collection_name}")
 
     async def batch_save_to_milvus(self, collection_name, schema, index_params, data):
         try:
@@ -421,7 +458,6 @@ class WebCrawler:
         :return: 切割后的子字符串数组
         """
         return [s[i:i+length] for i in range(0, len(s), length)]
-
 
     async def _generate_summary(self, query: str, content: str) -> str:
         if not content or len(content.strip()) == 0:
