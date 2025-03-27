@@ -128,7 +128,7 @@ class DeepresearchAgent:
 
         while current_iteration < max_iterations:
             current_iteration += 1
-            logger.info(f"开始第 {current_iteration}/{max_iterations} 轮信息检索")
+            logger.info(f"开始第{current_iteration}/{max_iterations}轮信息检索，此轮扩展生成的相关查询：{refined_queries}")
             try:
                 iteration_results = []
             
@@ -222,6 +222,10 @@ class DeepresearchAgent:
                     break
 
                 if len(all_results) > 0:
+                    if (len(all_results) >= self.summary_limit):
+                        logger.info(f"已收集{len(all_results)}条结果(上限是{self.summary_limit}条)，停止迭代")
+                        break
+
                     is_sufficient = await self._evaluate_information_sufficiency(message.message, all_results)
                     
                     if is_sufficient:
@@ -237,10 +241,12 @@ class DeepresearchAgent:
                             logger.info(f"生成 {len(refined_queries)} 个新查询继续检索: {refined_queries}")
                         else:
                             logger.info("无法生成新的查询，将使用最初查询继续检索")
+                            refined_queries = [message.message]
             except Exception as e:
                 logger.error(f"第 {current_iteration} 轮检索出错: {str(e)}", exc_info=True)
         
-        logger.info(f"研究结束，共收集 {len(all_results)} 条结果")
+        all_results = all_results[:self.summary_limit]
+        logger.info(f"研究结束，共收集{len(all_results)}条结果(上限是{self.summary_limit}条)")
         
         for result in all_results:
             if "scenario" not in result or not result["scenario"]:
@@ -266,26 +272,21 @@ class DeepresearchAgent:
         if not results:
             return False
             
-        # 准备上下文信息
         context_text = ""
-        for i, result in enumerate(results[:10], 1):  # 只使用前10个结果评估，避免过长
+        for i, result in enumerate(results):
             if 'content' in result and result['content']:
-                snippet = result['content'][:1000]  # 取内容前1000个字符
-                context_text += f"文档{i}: {snippet}...\n\n"
+                snippet = result['content']
+                context_text += f"文档{i}: {snippet}...\n"
         
-        # 使用模板构建提示词
         prompt = PromptTemplates.format_information_sufficiency_prompt(query, context_text)
         
         try:
             response = await self.llm_client.generate(prompt)
-            
-            # 判断回复中是否包含SUFFICIENT
             if "SUFFICIENT" in response.strip().upper():
                 return True
             return False
         except Exception as e:
             logger.error(f"评估信息充分性时出错: {str(e)}", exc_info=True)
-            # 出错时默认为不足，继续搜索
             return False
     
     async def _generate_additional_queries(self, original_query, results):
@@ -303,36 +304,27 @@ class DeepresearchAgent:
             return [original_query]  # 如果没有结果，返回原始查询
         
         context_text = ""
-        for i, result in results:
+        for i, result in enumerate(results):
             if 'content' in result and result['content']:
                 snippet = result['content']
                 context_text += f"文档{i}: {snippet}...\n\n"
         
-        # 使用模板构建提示词
         prompt = PromptTemplates.format_additional_queries_prompt(original_query, context_text, self.generate_query_num)
         
         try:
             response = await self.llm_client.generate(prompt)
-            
-            # 解析响应获取查询列表
             queries = [q.strip() for q in response.strip().split("\n") if q.strip()]
-            
-            # 过滤并限制查询数量
-            valid_queries = [q for q in queries if len(q.split()) <= 10 and q != original_query][:5]
-            
+            valid_queries = [q for q in queries if len(q.split()) <= 10 and q != original_query][:self.generate_query_num]
             if not valid_queries:
-                # 如果没有有效查询，使用默认策略生成
                 default_queries = [
                     f"{original_query} 最新进展",
                     f"{original_query} 案例分析",
                     f"{original_query} 挑战与机遇"
                 ]
                 return default_queries
-                
             return valid_queries
         except Exception as e:
             logger.error(f"生成额外查询时出错: {str(e)}", exc_info=True)
-            # 出错时返回简单变形的原始查询
             return [
                 f"{original_query} 最新研究",
                 f"{original_query} 应用案例"
@@ -350,23 +342,15 @@ class DeepresearchAgent:
         prompt = PromptTemplates.format_search_queries_prompt(message.message, self.generate_query_num)
         
         try:
-            # 调用LLM生成搜索查询
             response = await self.llm_client.generate(prompt)
-
-            # 解析JSON响应
             queries = str2Json(response)
-            
-            # 确保返回列表类型
             if isinstance(queries, list):
                 return queries
             else:
                 logger.warning(f"搜索查询生成格式错误: {response}")
-                # 返回基本查询
                 return [message.message]
-                
         except Exception as e:
             logger.error(f"生成搜索查询时出错: {e}", exc_info=True)
-            # 出错时使用原始消息作为查询
             return [message.message]
     
     async def _generate_response_stream(self, message, research_results):
@@ -380,16 +364,14 @@ class DeepresearchAgent:
         Returns:
             流式响应生成器
         """
-        # 提取查询文本
         query = message.message
-        
         try:
             results = research_results.get("results", [])
             if results:
                 all_summaries = []
                 all_summaries.extend([result['content'] for result in results if 'content' in result])
                 if all_summaries:
-                    deep_analysis_prompt = PromptTemplates.format_deep_analysis_prompt(query, '\n\n'.join(all_summaries))
+                    deep_analysis_prompt = PromptTemplates.format_deep_analysis_prompt(query, '\n'.join(all_summaries))
                     async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
                         yield chunk
             else:

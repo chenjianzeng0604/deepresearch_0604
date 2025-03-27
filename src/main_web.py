@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
-import asyncio
 import logging
 import sys
 import uuid
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from typing import List, Optional
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -22,11 +21,9 @@ sys.path.append(str(ROOT_DIR))
 
 # 确保终端显示中文
 import io
-import locale
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from src.models.config import AppConfig
 from src.models.response import ChatMessage
 from src.agents.deepresearch_agent import DeepresearchAgent
 from src.distribution.email_sender import EmailSender

@@ -516,56 +516,56 @@ class WebCrawler:
                 return None
     
     async def fetch_url(self, url: str, useProxy: bool = False) -> Optional[str]:
-        async with async_playwright() as p:
-            if useProxy:
-                logger.info(f"Fetching URL {url} with proxy")
-                browser = await p.chromium.launch(
-                    headless=True,
-                    proxy=self.proxies,
-                    args=[
-                       "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-web-security",
-                        "--disable-features=IsolateOrigins,site-per-process",
-                        f"--user-agent={UserAgent().random}",
-                        "--use-fake-ui-for-media-stream",
-                        "--use-fake-device-for-media-stream",
-                        "--disable-gpu",
-                        "--disable-dev-shm-usage",
-                        "--disable-software-rasterizer"
-                    ],
-                    env={"SSLKEYLOGFILE": "/dev/null"}
-                )
-            else:
-                logger.info(f"Fetching URL {url} without proxy")
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
+        try:
+            async with async_playwright() as p:
+                if useProxy:
+                    logger.info(f"Fetching URL {url} with proxy")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        proxy=self.proxies,
+                        args=[
                         "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-web-security",
-                        "--disable-features=IsolateOrigins,site-per-process",
-                        f"--user-agent={UserAgent().random}",
-                        "--use-fake-ui-for-media-stream",
-                        "--use-fake-device-for-media-stream",
-                        "--disable-gpu",
-                        "--disable-dev-shm-usage",
-                        "--disable-software-rasterizer"
-                    ],
-                    env={"SSLKEYLOGFILE": "/dev/null"}
+                            "--no-sandbox",
+                            "--disable-web-security",
+                            "--disable-features=IsolateOrigins,site-per-process",
+                            f"--user-agent={UserAgent().random}",
+                            "--use-fake-ui-for-media-stream",
+                            "--use-fake-device-for-media-stream",
+                            "--disable-gpu",
+                            "--disable-dev-shm-usage",
+                            "--disable-software-rasterizer"
+                        ],
+                        env={"SSLKEYLOGFILE": "/dev/null"}
+                    )
+                else:
+                    logger.info(f"Fetching URL {url} without proxy")
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--disable-blink-features=AutomationControlled",
+                            "--no-sandbox",
+                            "--disable-web-security",
+                            "--disable-features=IsolateOrigins,site-per-process",
+                            f"--user-agent={UserAgent().random}",
+                            "--use-fake-ui-for-media-stream",
+                            "--use-fake-device-for-media-stream",
+                            "--disable-gpu",
+                            "--disable-dev-shm-usage",
+                            "--disable-software-rasterizer"
+                        ],
+                        env={"SSLKEYLOGFILE": "/dev/null"}
+                    )
+
+                context = await browser.new_context(
+                    user_agent=UserAgent().random,
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US,en;q=0.9",
+                    timezone_id="America/New_York",
+                    permissions=["geolocation"],
+                    geolocation={"latitude": 40.7128, "longitude": -74.0060},
+                    color_scheme="dark"
                 )
 
-            context = await browser.new_context(
-                user_agent=UserAgent().random,
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US,en;q=0.9",
-                timezone_id="America/New_York",
-                permissions=["geolocation"],
-                geolocation={"latitude": 40.7128, "longitude": -74.0060},
-                color_scheme="dark"
-            )
-
-            try:
                 await context.add_init_script("""
                     Object.defineProperty(navigator, 'webdriver', {
                         get: () => undefined
@@ -620,15 +620,14 @@ class WebCrawler:
                         return None
                 else:
                     return None
-            finally:
-                try:
-                    await context.close()
-                except Exception as context_error:
-                    logger.error(f"关闭浏览器上下文失败: {str(context_error)}")
-                try:
-                    await browser.close()
-                except Exception as browser_error:
-                    logger.error(f"关闭浏览器失败: {str(browser_error)}")
+        except Exception as e:
+            logger.error(f"获取页面内容失败: {str(e)}")
+            return None
+        finally:
+            try:
+                await browser.close()
+            except Exception as browser_error:
+                logger.error(f"关闭浏览器失败: {str(browser_error)}")
 
     def parse_html(self, html_content: str) -> Optional[BeautifulSoup]:
         """
@@ -774,6 +773,9 @@ class ContentQualityClassifier:
         text = re.sub(r'<[^>]+>', ' ', text)
         # 移除多余空白字符
         text = re.sub(r'\s+', ' ', text)
+        # 超过模型能处理的长度，进行截断
+        if len(text) > self.max_length:
+            text = text[:self.max_length]
         return text
     
     def predict_quality(self, text):
