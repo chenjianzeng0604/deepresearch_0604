@@ -76,11 +76,11 @@ class ScheduledCrawler:
         search_urls = self.agent.crawler_manager.config.get_search_url(scenario)
 
         if scenario == "healthcare":
-            platforms = ["web_site", "arxiv", "search"]
+            platforms = ["web_site", "arxiv"]
         elif scenario == "ai":
-            platforms = ["web_site", "github", "arxiv", "weixin", "search"]
+            platforms = ["web_site", "github", "arxiv", "weixin"]
         else:
-            platforms = ["web_site", "search"]
+            platforms = ["web_site"]
             
         start_time = datetime.now()
         logger.info(f"开始执行定时爬虫任务，时间: {start_time}, 关键词：{keywords}，平台：{platforms}, 场景：{scenario}")
@@ -163,29 +163,6 @@ class ScheduledCrawler:
                             logger.warning(f"无法从微信获取文章: {keyword}")
                     except Exception as e:
                         logger.error(f"微信文章爬取时出错: {str(e)}")
-                
-                if "search" in platforms:
-                    try:
-                        logger.info(f"使用WebSearcher搜索获取 '{keyword}' 相关文章")
-                        search_results = await self._execute_task_with_semaphore(self.agent.web_searcher.search, keyword)
-                        if search_results:
-                            links = []
-                            for result in search_results:
-                                if "link" in result and result["link"]:
-                                    links.append(result["link"])
-                            if links:
-                                all_links.extend(links)
-                                task = asyncio.create_task(self._execute_task_with_semaphore(
-                                    self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, keyword, links, scenario))
-                                all_tasks.append(task)
-                                logger.info(f"从WebSearcher获取到 {len(links)} 个有效链接")
-                            else:
-                                logger.warning(f"搜索结果中没有有效链接: {keyword}")
-                        else:
-                            logger.warning(f"无法通过WebSearcher获取搜索结果: {keyword}")
-                    except Exception as e:
-                        logger.error(f"使用WebSearcher搜索获取文章时出错: {str(e)}")
-                
             except Exception as e:
                 logger.error(f"处理关键词 '{keyword}' 时出错: {str(e)}")
         
