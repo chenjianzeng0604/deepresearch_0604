@@ -1,0 +1,211 @@
+{% extends 'admin/layout.html' %}
+
+{% block title %}{{ title }} - 爬虫配置管理系统{% endblock %}
+
+{% block header %}{{ title }}{% endblock %}
+
+{% block styles %}
+{{ super() }}
+<style>
+    .field-info {
+        font-size: 0.85rem;
+        color: #6c757d;
+        margin-top: 0.25rem;
+    }
+    .field-required::after {
+        content: '*';
+        color: red;
+        margin-left: 5px;
+    }
+    .form-section {
+        border-bottom: 1px solid #e9ecef;
+        padding-bottom: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .form-section-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        color: #495057;
+    }
+    .help-tooltip {
+        color: #6c757d;
+        cursor: pointer;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <div class="card">
+        <div class="card-body">
+            <form method="post" id="scenarioForm">
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-info-circle"></i> 基本信息
+                    </div>
+                
+                    <div class="mb-3">
+                        <label for="name" class="form-label field-required">场景名称</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control {% if errors and errors.get('name') %}is-invalid{% endif %}" id="name" name="name" required
+                                value="{% if form_data and form_data.get('name') %}{{ form_data.get('name') }}{% elif scenario %}{{ scenario.name }}{% endif %}"
+                                {% if edit_mode and scenario %}readonly{% endif %}
+                                pattern="[a-z0-9_]+" title="只能包含小写字母、数字和下划线">
+                            <span class="input-group-text help-tooltip" data-bs-toggle="tooltip" 
+                                title="场景名称将用作数据库与代码中的标识符，创建后不可修改">
+                                <i class="fas fa-question-circle"></i>
+                            </span>
+                        </div>
+                        {% if errors and errors.get('name') %}
+                        <div class="invalid-feedback d-block">
+                            {{ errors.get('name') }}
+                        </div>
+                        {% endif %}
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> 场景名称作为唯一标识，只能包含小写字母、数字和下划线，如 "google_search"
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="display_name" class="form-label field-required">显示名称</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control {% if errors and errors.get('display_name') %}is-invalid{% endif %}" id="display_name" name="display_name" required
+                                value="{% if form_data and form_data.get('display_name') %}{{ form_data.get('display_name') }}{% elif scenario %}{{ scenario.display_name }}{% endif %}">
+                            <span class="input-group-text help-tooltip" data-bs-toggle="tooltip" 
+                                title="显示名称用于用户界面展示，可以包含任何字符">
+                                <i class="fas fa-question-circle"></i>
+                            </span>
+                        </div>
+                        {% if errors and errors.get('display_name') %}
+                        <div class="invalid-feedback d-block">
+                            {{ errors.get('display_name') }}
+                        </div>
+                        {% endif %}
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> 显示在用户界面上的名称，可以使用中文，如 "谷歌搜索"
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-cog"></i> 配置选项
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="description" class="form-label">描述</label>
+                        <textarea class="form-control" id="description" name="description" rows="3">{% if form_data and form_data.get('description') %}{{ form_data.get('description') }}{% elif scenario %}{{ scenario.description }}{% endif %}</textarea>
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> 对此场景的详细描述，用于帮助理解场景用途
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="collection_name" class="form-label field-required">Milvus集合名称</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control {% if errors and errors.get('collection_name') %}is-invalid{% endif %}" id="collection_name" name="collection_name" required
+                                value="{% if form_data and form_data.get('collection_name') %}{{ form_data.get('collection_name') }}{% elif scenario %}{{ scenario.collection_name }}{% endif %}"
+                                pattern="[A-Z0-9_]+" title="只能包含大写字母、数字和下划线">
+                            <span class="input-group-text help-tooltip" data-bs-toggle="tooltip" 
+                                title="存储爬取结果的Milvus向量数据库集合名称">
+                                <i class="fas fa-question-circle"></i>
+                            </span>
+                        </div>
+                        {% if errors and errors.get('collection_name') %}
+                        <div class="invalid-feedback d-block">
+                            {{ errors.get('collection_name') }}
+                        </div>
+                        {% endif %}
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> Milvus集合名称，建议全大写字母，如 "DEEPRESEARCH_GOOGLE"
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-toggle-on"></i> 状态设置
+                    </div>
+                    
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="is_default" name="is_default"
+                            {% if form_data and form_data.get('is_default') %}checked{% elif scenario and scenario.is_default %}checked{% endif %}>
+                        <label class="form-check-label" for="is_default">设为默认场景</label>
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> 默认场景将用于未指定场景的爬虫任务，同一时间只能有一个默认场景
+                        </div>
+                    </div>
+                    
+                    {% if edit_mode %}
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="is_active" name="is_active"
+                            {% if form_data and form_data.get('is_active') %}checked{% elif scenario and scenario.is_active %}checked{% endif %}>
+                        <label class="form-check-label" for="is_active">启用</label>
+                        <div class="field-info">
+                            <i class="fas fa-info-circle"></i> 禁用场景后，该场景下的爬虫任务将不会执行
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div class="d-flex justify-content-between mt-4">
+                    <a href="{{ url_for('admin.scenarios') }}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> 返回
+                    </a>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> 保存
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 初始化所有工具提示
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.map(function(tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+        
+        // 表单验证
+        const form = document.getElementById('scenarioForm');
+        form.addEventListener('submit', function(event) {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        });
+        
+        // 场景名称格式化助手
+        const nameInput = document.getElementById('name');
+        if (nameInput && !nameInput.readOnly) {
+            nameInput.addEventListener('input', function() {
+                // 自动转换为小写并替换空格为下划线
+                let value = this.value.toLowerCase().replace(/\s+/g, '_');
+                // 只保留合法字符
+                value = value.replace(/[^a-z0-9_]/g, '');
+                this.value = value;
+            });
+        }
+        
+        // 集合名称格式化助手
+        const collectionInput = document.getElementById('collection_name');
+        if (collectionInput) {
+            collectionInput.addEventListener('input', function() {
+                // 自动转换为大写并替换空格为下划线
+                let value = this.value.toUpperCase().replace(/\s+/g, '_');
+                // 只保留合法字符
+                value = value.replace(/[^A-Z0-9_]/g, '');
+                this.value = value;
+            });
+        }
+    });
+</script>
+{% endblock %}

@@ -15,8 +15,9 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import signal
+import json
 
-from src.agents.deepresearch_agent import DeepresearchAgent
+from src.tools.crawler.web_crawlers import CrawlerManager
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,26 @@ class ScheduledCrawler:
         """
         初始化定时爬虫任务管理器
         """
+        # Use lazy import when creating the agent instance
+        from src.agents.deepresearch_agent import DeepresearchAgent
         self.agent = DeepresearchAgent()
+        self.crawler_manager = CrawlerManager()
         self.scheduler = AsyncIOScheduler()
         self.running = False
         self.semaphore = asyncio.Semaphore(int(os.getenv("CRAWLER_MAX_CONCURRENT_TASKS", 3)))
+        self.max_concurrent_tasks = int(os.getenv("CRAWLER_MAX_CONCURRENT_TASKS", 3))
+        self.current_tasks = set()
+        self.logger = logger
+        
+        # 初始化配置管理器
+        try:
+            from src.admin.crawler_config_manager import CrawlerConfigManager
+            self.config_manager = CrawlerConfigManager()
+            self.db_available = True
+        except Exception as e:
+            self.logger.warning(f"无法初始化配置管理器: {str(e)}")
+            self.config_manager = None
+            self.db_available = False
     
     async def _execute_task_with_semaphore(self, task_func, *args, **kwargs):
         """
@@ -58,28 +75,170 @@ class ScheduledCrawler:
             finally:
                 logger.debug(f"释放信号量，任务完成: {task_func.__name__}")
     
-    async def scheduled_crawl(self, keywords: List[str], scenario: str = None):
+    async def load_and_schedule_tasks(self):
+        """从数据库加载定时任务并进行调度"""
+        if not self.db_available or not self.config_manager:
+            self.logger.warning("数据库连接不可用或配置管理器未初始化，无法加载定时任务")
+            return False
+            
+        try:
+            # 获取所有活跃的定时任务
+            active_tasks = self.config_manager.get_active_tasks()
+            if not active_tasks:
+                self.logger.info("没有找到活跃的定时爬虫任务")
+                return False
+                
+            # 遍历任务并添加到调度器
+            task_count = 0
+            for task in active_tasks:
+                try:
+                    # 解析任务参数
+                    task_id = task['id']
+                    task_name = task['task_name']
+                    cron_expression = task['cron_expression']
+                    scenario = task['scenario_name']
+                    collection_name = task['collection_name']
+                    
+                    # 解析关键词和平台列表
+                    keywords = json.loads(task['keywords'])
+                    platforms = json.loads(task['platforms'])
+                    max_concurrent = task.get('max_concurrent_tasks', 3)
+                    
+                    if not keywords or not platforms:
+                        self.logger.warning(f"任务 {task_name} (ID: {task_id}) 缺少关键词或平台设置，跳过")
+                        continue
+                    
+                    # 添加到调度器
+                    cron_parts = cron_expression.split()
+                    if len(cron_parts) != 5:
+                        self.logger.error(f"任务 {task_name} (ID: {task_id}) 的Cron表达式格式错误: {cron_expression}")
+                        continue
+                        
+                    minute, hour, day, month, day_of_week = cron_parts
+                    
+                    # 创建任务函数
+                    async def task_wrapper(task_id=task_id, name=task_name, keywords=keywords, 
+                                         scenario=scenario, platforms=platforms, max_concurrent=max_concurrent):
+                        self.logger.info(f"开始执行定时爬虫任务: {name} (ID: {task_id})")
+                        try:
+                            # 更新最后运行时间
+                            if self.config_manager:
+                                self.config_manager.update_task_last_run_time(task_id)
+                                
+                            # 设置当前任务的并发数
+                            old_max_tasks = self.max_concurrent_tasks
+                            self.max_concurrent_tasks = max_concurrent
+                            
+                            # 调用爬虫执行
+                            await self.scheduled_crawl(keywords, scenario, platforms)
+                            
+                            # 恢复原并发数
+                            self.max_concurrent_tasks = old_max_tasks
+                            
+                            self.logger.info(f"定时爬虫任务执行完成: {name} (ID: {task_id})")
+                        except Exception as e:
+                            self.logger.error(f"执行定时爬虫任务出错: {name} (ID: {task_id}), 错误: {str(e)}")
+                    
+                    # 添加到调度器
+                    self.scheduler.add_job(
+                        task_wrapper,
+                        'cron',
+                        minute=minute,
+                        hour=hour,
+                        day=day,
+                        month=month,
+                        day_of_week=day_of_week,
+                        id=f"task_{task_id}",
+                        replace_existing=True,
+                        name=task_name
+                    )
+                    
+                    task_count += 1
+                    self.logger.info(f"已添加定时爬虫任务: {task_name} (ID: {task_id}), Cron: {cron_expression}")
+                    
+                except Exception as e:
+                    self.logger.error(f"添加定时任务出错: {str(e)}")
+            
+            self.logger.info(f"成功加载 {task_count} 个定时爬虫任务")
+            return task_count > 0
+            
+        except Exception as e:
+            self.logger.error(f"加载定时任务出错: {str(e)}")
+            return False
+    
+    async def run_task_by_id(self, task_id):
+        """根据任务ID执行特定的定时爬虫任务"""
+        if not self.db_available or not self.config_manager:
+            self.logger.warning("数据库连接不可用或配置管理器未初始化，无法执行任务")
+            return False
+            
+        try:
+            # 获取任务信息
+            task = self.config_manager.get_scheduled_task(task_id)
+            if not task:
+                self.logger.error(f"找不到任务 ID: {task_id}")
+                return False
+                
+            # 解析任务参数
+            task_name = task['task_name']
+            scenario = task['scenario_name']
+            
+            # 解析关键词和平台列表
+            keywords = json.loads(task['keywords'])
+            platforms = json.loads(task['platforms'])
+            max_concurrent = task.get('max_concurrent_tasks', 3)
+            
+            if not keywords or not platforms:
+                self.logger.warning(f"任务 {task_name} (ID: {task_id}) 缺少关键词或平台设置")
+                return False
+            
+            # 更新最后运行时间
+            self.config_manager.update_task_last_run_time(task_id)
+            
+            # 设置当前任务的并发数
+            old_max_tasks = self.max_concurrent_tasks
+            self.max_concurrent_tasks = max_concurrent
+            
+            # 调用爬虫执行
+            self.logger.info(f"开始执行定时爬虫任务: {task_name} (ID: {task_id})")
+            await self.scheduled_crawl(keywords, scenario, platforms)
+            
+            # 恢复原并发数
+            self.max_concurrent_tasks = old_max_tasks
+            
+            self.logger.info(f"定时爬虫任务执行完成: {task_name} (ID: {task_id})")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"执行任务 ID: {task_id} 出错: {str(e)}")
+            return False
+    
+    async def scheduled_crawl(self, keywords: List[str], scenario: str = None, platforms: List[str] = None):
         """
         定时执行爬虫任务
         
         Args:
             keywords: 搜索关键词列表
             scenario: 场景名称
+            platforms: 平台列表
         """
         if not keywords or len(keywords) == 0:
             logger.error("搜索关键词列表为空，无法执行爬虫任务")
             return
         if not scenario:
-            scenario = self.agent.crawler_manager.config.default_scenario
+            scenario = self.crawler_manager.config.default_scenario
             
-        search_url_formats = self.agent.crawler_manager.config.get_search_url_formats(scenario)
-        search_urls = self.agent.crawler_manager.config.get_search_url(scenario)
+        search_url_formats = self.crawler_manager.config.get_search_url_formats(scenario)
+        search_urls = self.crawler_manager.config.get_search_url(scenario)
 
         if scenario == "healthcare":
             platforms = ["web_site", "arxiv", "weixin"]
         elif scenario == "ai":
             platforms = ["web_site", "github", "arxiv", "weixin"]
         else:
+            platforms = ["web_site", "weixin"]
+            
+        if platforms is None:
             platforms = ["web_site", "weixin"]
             
         start_time = datetime.now()
@@ -99,7 +258,7 @@ class ScheduledCrawler:
                             search_url = search_url_format.format(encoded_query)
                             logger.info(f"从 {search_engine} 获取 '{keyword}' 相关文章，URL: {search_url}")
                             
-                            web_crawler = self.agent.crawler_manager.web_crawler
+                            web_crawler = self.crawler_manager.web_crawler
                             links = await self._execute_task_with_semaphore(web_crawler.parse_sub_url, search_url)
                             if not links:
                                 logger.warning(f"无法从 {search_url} 获取文章链接: {keyword}")
@@ -116,13 +275,13 @@ class ScheduledCrawler:
                 if "web_site" in platforms and search_urls:
                     logger.info(f"使用场景 '{scenario}' 的自定义URL爬取关键词 '{keyword}'")
                     task = asyncio.create_task(self._execute_task_with_semaphore(
-                        self.agent.crawler_manager.web_crawler.fetch_article_and_save2milvus, keyword, search_urls, scenario))
+                        self.crawler_manager.web_crawler.fetch_article_and_save2milvus, keyword, search_urls, scenario))
                     all_tasks.append(task)
                 
                 if "github" in platforms:
                     try:
                         logger.info(f"从GitHub获取 '{keyword}' 相关仓库")
-                        github_crawler = self.agent.crawler_manager.github_crawler
+                        github_crawler = self.crawler_manager.github_crawler
                         links = await self._execute_task_with_semaphore(github_crawler.parse_sub_url, keyword)
                         if links:
                             all_links.extend(links)
@@ -137,7 +296,7 @@ class ScheduledCrawler:
                 if "arxiv" in platforms:
                     try:
                         logger.info(f"从arXiv获取 '{keyword}' 相关论文")
-                        arxiv_crawler = self.agent.crawler_manager.arxiv_crawler
+                        arxiv_crawler = self.crawler_manager.arxiv_crawler
                         links = await self._execute_task_with_semaphore(arxiv_crawler.parse_sub_url, keyword)
                         if links:
                             all_links.extend(links)
@@ -152,7 +311,7 @@ class ScheduledCrawler:
                 if "weixin" in platforms:
                     try:
                         logger.info(f"从微信获取 '{keyword}' 相关文章")
-                        wechat_crawler = self.agent.crawler_manager.wechat_crawler
+                        wechat_crawler = self.crawler_manager.wechat_crawler
                         links = await self._execute_task_with_semaphore(wechat_crawler.parse_sub_url, keyword)
                         if links:
                             all_links.extend(links)
@@ -185,9 +344,9 @@ class ScheduledCrawler:
         """
         if not self.scheduler.running:
             # 为特定场景添加定时任务
-            if scenario not in self.agent.crawler_manager.config.supported_scenarios:
+            if scenario not in self.crawler_manager.config.supported_scenarios:
                 logger.warning(f"不支持的场景: {scenario}，使用默认场景")
-                scenario = self.agent.crawler_manager.config.default_scenario
+                scenario = self.crawler_manager.config.default_scenario
             
             # 根据场景选择时间
             hour = 0

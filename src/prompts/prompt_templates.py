@@ -28,13 +28,15 @@ PROMPT_TEMPLATES = {
     
     # 深度分析提示词
     "DEEP_ANALYSIS_TEMPLATE": """  
-    针对用户问题，结合查到的数据，进行深度总结。 
+    针对用户问题，结合查到的数据和历史对话，进行深度总结。 
     
     当前时间：{current_time}
 
     用户问题：{query}
 
     查到的数据：{summaries}
+    
+    历史对话上下文：{context}
     
     你的深度总结：
     """,
@@ -126,16 +128,22 @@ class PromptTemplates:
         return PROMPT_TEMPLATES["SEARCH_QUERIES_TEMPLATE"].format(query=query, num=num, current_time=datetime.now().strftime("%Y-%m-%d"))
     
     @classmethod
-    def format_deep_analysis_prompt(cls, query: str, summaries: str) -> str:
+    def format_deep_analysis_prompt(cls, query: str, summaries: str, context: str = "") -> str:
         """格式化深度分析提示词
         
         Args:
             query: 用户查询
             summaries: 摘要内容
+            context: 历史对话上下文，默认为空字符串
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["DEEP_ANALYSIS_TEMPLATE"].format(query=query, summaries=summaries, current_time=datetime.now().strftime("%Y-%m-%d"))
+        return PROMPT_TEMPLATES["DEEP_ANALYSIS_TEMPLATE"].format(
+            query=query, 
+            summaries=summaries, 
+            context=context,
+            current_time=datetime.now().strftime("%Y-%m-%d")
+        )
     
     @classmethod
     def format_information_sufficiency_prompt(cls, query: str, context_text: str) -> str:

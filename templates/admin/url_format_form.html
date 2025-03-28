@@ -1,0 +1,63 @@
+{% extends 'admin/layout.html' %}
+
+{% block title %}{{ title }} - 爬虫配置管理系统{% endblock %}
+
+{% block header %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <div class="card">
+        <div class="card-body">
+            <form method="post">
+                <div class="mb-3">
+                    <label for="scenario_id" class="form-label">场景</label>
+                    <select class="form-select" id="scenario_id" name="scenario_id" required>
+                        {% for scenario in scenarios %}
+                        <option value="{{ scenario.id }}" {% if url_format and url_format.scenario_id == scenario.id %}selected{% endif %}>
+                            {{ scenario.display_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="platform" class="form-label">平台</label>
+                    <select class="form-select" id="platform" name="platform" required>
+                        {% for platform in platforms %}
+                        <option value="{{ platform.name }}" {% if url_format and url_format.platform == platform.name %}selected{% endif %}>
+                            {{ platform.display_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="url_format" class="form-label">URL格式</label>
+                    <input type="text" class="form-control" id="url_format" name="url_format" required
+                           {% if url_format %}value="{{ url_format.url_format }}"{% endif %}>
+                    <div class="form-text">使用{keyword}作为关键词的占位符，如https://www.example.com/search?q={keyword}</div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="description" class="form-label">描述</label>
+                    <textarea class="form-control" id="description" name="description" rows="3">{% if url_format %}{{ url_format.description }}{% endif %}</textarea>
+                    <div class="form-text">URL格式的简短描述，便于管理</div>
+                </div>
+                
+                {% if edit_mode %}
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="is_active" name="is_active"
+                           {% if url_format and url_format.is_active %}checked{% endif %}>
+                    <label class="form-check-label" for="is_active">启用</label>
+                </div>
+                {% endif %}
+                
+                <div class="d-flex justify-content-between">
+                    <a href="{{ url_for('admin.url_formats') }}" class="btn btn-secondary">返回</a>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -5,8 +5,7 @@ from typing import Dict, Any, Optional, List, AsyncGenerator
 import time
 import asyncio
 import openai
-
-from src.utils.prompt_templates import PromptTemplates
+from src.prompts.prompt_templates import PromptTemplates
 
 logger = logging.getLogger(__name__)
 

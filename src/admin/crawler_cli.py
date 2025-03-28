@@ -10,7 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 将项目根目录添加到Python路径
-ROOT_DIR = Path(__file__).parent.parent
+ROOT_DIR = Path(__file__).parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
 # 确保终端显示中文
@@ -18,12 +18,12 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from src.core.news_processor import NewsProcessor
-from src.models.config import AppConfig
-from src.distribution.factory import create_distribution_manager
+from src.app.news_processor import NewsProcessor
+from src.config.app_config import AppConfig
+from src.tools.distribution.factory import create_distribution_manager
 from src.utils.formatters import format_report
-from src.crawler.scheduled_crawler import start_scheduler, stop_scheduler
-from src.crawler.config import CrawlerConfig
+from src.tools.crawler.scheduled_crawler import start_scheduler, stop_scheduler
+from src.tools.crawler.config import CrawlerConfig
 
 # 加载环境变量
 load_dotenv()
@@ -34,7 +34,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.join("data", "logs", "app.log"), encoding="utf-8")
+        logging.FileHandler(os.path.join("data", "logs", "crawler.log"), encoding="utf-8")
     ]
 )
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ async def start_crawler_cmd(args):
         if scheduler:
             print("\n定时爬虫任务已成功启动！")
             print("\n程序将继续在后台运行，可以使用Ctrl+C终止")
-            print("或者使用命令 'python -m src.main_cli scheduler-stop' 停止任务")
+            print("或者使用命令 'python -m src.admin.crawler_cli scheduler-stop' 停止任务")
             
             # 保持程序运行，直到按下Ctrl+C
             try:
@@ -199,7 +199,7 @@ async def stop_crawler_cmd(args):
         if result:
             print("已成功停止定时爬虫任务")
         else:
-            print("没有正在运行的定时爬虫任务")
+            print("没有正在运行的定时爬虫任务或停止失败")
     except Exception as e:
         logger.error(f"停止定时爬虫任务失败: {e}", exc_info=True)
         print(f"错误: {e}")
@@ -211,64 +211,61 @@ def setup_parser():
     Returns:
         argparse.ArgumentParser: 参数解析器
     """
-    parser = argparse.ArgumentParser(description="深度研究助手 - 命令行版")
-    subparsers = parser.add_subparsers(dest="command", help="子命令")
+    parser = argparse.ArgumentParser(description="深度研究爬虫工具 - 命令行界面")
+    subparsers = parser.add_subparsers(dest='command', help='命令')
     
-    # 生成报告
-    generate_parser = subparsers.add_parser("generate", help="生成深度研究报告")
-    generate_parser.add_argument("topic", help="报告主题")
-    generate_parser.add_argument("--distribute", action="store_true", help="生成后分发报告")
-    generate_parser.add_argument("--platforms", nargs="+", help="分发平台列表")
+    # 生成报告命令
+    report_parser = subparsers.add_parser('report', help='生成科技分析报告')
+    report_parser.add_argument('topic', help='报告主题')
     
-    # 列出报告
-    list_parser = subparsers.add_parser("list", help="列出报告")
-    list_parser.add_argument("--limit", type=int, default=10, help="最大列出数量 (默认: 10)")
-    list_parser.add_argument("--type", help="报告类型过滤")
+    # 列出报告命令
+    list_parser = subparsers.add_parser('list', help='列出已生成的报告')
+    list_parser.add_argument('--limit', type=int, default=10, help='列出的最大数量')
+    list_parser.add_argument('--type', help='报告类型过滤')
     
-    # 分发报告
-    distribute_parser = subparsers.add_parser("distribute", help="分发报告")
-    distribute_parser.add_argument("id", help="报告ID")
-    distribute_parser.add_argument("--platforms", nargs="+", help="分发平台列表")
+    # 分发报告命令
+    distribute_parser = subparsers.add_parser('distribute', help='分发报告到平台')
+    distribute_parser.add_argument('report_id', help='报告ID')
+    distribute_parser.add_argument('--platforms', nargs='+', help='指定分发平台列表')
     
-    # 启动定时爬虫任务
-    scheduler_parser = subparsers.add_parser("scheduler-start", help="启动定时爬虫任务")
-    scheduler_parser.add_argument("--keywords", nargs="+", required=True, help="搜索关键词列表 (必填，可多个)")
-    scheduler_parser.add_argument("--platforms", nargs="+", 
-                        default=None,
-                        help="搜索平台列表 (可选，默认根据场景自动选择)")
-    scheduler_parser.add_argument("--run-now", action="store_true", help="是否立即执行一次爬虫任务")
-    scheduler_parser.add_argument("--scenario", help="指定场景 (可选)")
-    scheduler_parser.add_argument("--all-scenarios", action="store_true", help="是否同时启动所有场景")
+    # 启动定时爬虫命令
+    scheduler_parser = subparsers.add_parser('scheduler-start', help='启动定时爬虫任务')
+    scheduler_parser.add_argument('keywords', help='爬取关键词，多个关键词用逗号分隔')
+    scheduler_parser.add_argument('--scenario', help='爬取场景配置')
+    scheduler_parser.add_argument('--run-now', action='store_true', help='立即执行一次爬取')
     
-    # 停止定时爬虫任务
-    subparsers.add_parser("scheduler-stop", help="停止定时爬虫任务")
+    # 停止定时爬虫命令
+    subparsers.add_parser('scheduler-stop', help='停止定时爬虫任务')
     
     return parser
 
 async def main():
+    """主函数"""
     parser = setup_parser()
     args = parser.parse_args()
     
-    if args.command == "generate":
+    if args.command == 'report':
         async for update in generate_report_cmd(args):
             print(update)
-    elif args.command == "list":
+    elif args.command == 'list':
         await list_reports_cmd(args)
-    elif args.command == "distribute":
-        await distribute_report_cmd(report_id=args.id, platforms=args.platforms)
-    elif args.command == "scheduler-start":
+    elif args.command == 'distribute':
+        await distribute_report_cmd(args.report_id, args.platforms)
+    elif args.command == 'scheduler-start':
         await start_crawler_cmd(args)
-    elif args.command == "scheduler-stop":
+    elif args.command == 'scheduler-stop':
         await stop_crawler_cmd(args)
     else:
         parser.print_help()
 
 if __name__ == "__main__":
-    print("\n深度研究助手 - 命令行版\n")
+    print("\n深度研究爬虫工具 - 命令行版\n")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n操作已取消")
+        print("\n程序已被用户中断")
     except Exception as e:
-        logger.error(f"程序执行出错: {e}", exc_info=True)
-        print(f"错误: {e}")
+        logger.error(f"运行时错误: {e}", exc_info=True)
+        print(f"\n发生错误: {e}")
+    finally:
+        print("\n程序已退出")

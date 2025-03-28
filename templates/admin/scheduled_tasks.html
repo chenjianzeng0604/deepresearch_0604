@@ -1,0 +1,193 @@
+{% extends "admin/layout.html" %}
+
+{% block title %}定时爬虫任务管理{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4">
+    <h1 class="mt-4">定时爬虫任务管理</h1>
+    <ol class="breadcrumb mb-4">
+        <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">控制面板</a></li>
+        <li class="breadcrumb-item active">定时爬虫任务管理</li>
+    </ol>
+    
+    <div class="card mb-4">
+        <div class="card-header">
+            <i class="fas fa-calendar-alt me-1"></i>
+            定时爬虫任务列表
+            <a href="{{ url_for('admin.add_scheduled_task') }}" class="btn btn-primary btn-sm float-end">
+                <i class="fas fa-plus"></i> 添加新任务
+            </a>
+        </div>
+        <div class="card-body">
+            {% if tasks %}
+            <div class="table-responsive">
+                <table class="table table-striped table-hover" id="tasks-table">
+                    <thead>
+                        <tr>
+                            <th>任务名称</th>
+                            <th>场景</th>
+                            <th>关键词</th>
+                            <th>平台</th>
+                            <th>定时表达式</th>
+                            <th>上次执行时间</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in tasks %}
+                        <tr>
+                            <td>{{ task.task_name }}</td>
+                            <td>{{ task.scenario_display_name }}</td>
+                            <td>
+                                {% if task.keywords_list|length > 0 %}
+                                <span class="badge bg-info" title="{{ task.keywords_list|join(', ') }}">
+                                    {{ task.keywords_list|length }} 个关键词
+                                </span>
+                                {% else %}
+                                <span class="badge bg-secondary">无关键词</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if task.platforms_list|length > 0 %}
+                                <span class="badge bg-info" title="{{ task.platforms_list|join(', ') }}">
+                                    {{ task.platforms_list|length }} 个平台
+                                </span>
+                                {% else %}
+                                <span class="badge bg-secondary">无平台</span>
+                                {% endif %}
+                            </td>
+                            <td><code>{{ task.cron_expression }}</code></td>
+                            <td>
+                                {% if task.last_run_time %}
+                                {{ task.last_run_time.strftime('%Y-%m-%d %H:%M:%S') }}
+                                {% else %}
+                                未执行
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if task.is_active %}
+                                <span class="badge bg-success">已启用</span>
+                                {% else %}
+                                <span class="badge bg-warning text-dark">已禁用</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group btn-group-sm">
+                                    <a href="{{ url_for('admin.edit_scheduled_task', task_id=task.id) }}" class="btn btn-primary" title="编辑任务">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    <form action="{{ url_for('admin.toggle_scheduled_task', task_id=task.id) }}" method="post" class="d-inline">
+                                        <button type="submit" class="btn btn-{% if task.is_active %}warning{% else %}success{% endif %}" title="{% if task.is_active %}禁用任务{% else %}启用任务{% endif %}">
+                                            <i class="fas fa-{% if task.is_active %}pause{% else %}play{% endif %}"></i>
+                                        </button>
+                                    </form>
+                                    <form action="{{ url_for('admin.run_scheduled_task', task_id=task.id) }}" method="post" class="d-inline run-task-form">
+                                        <button type="submit" class="btn btn-info" title="立即执行">
+                                            <i class="fas fa-play-circle"></i>
+                                        </button>
+                                    </form>
+                                    <form action="{{ url_for('admin.delete_scheduled_task', task_id=task.id) }}" method="post" class="d-inline delete-form">
+                                        <button type="submit" class="btn btn-danger" title="删除任务">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i> 暂无定时爬虫任务，请点击右上角的"添加新任务"按钮添加
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="card mb-4">
+        <div class="card-header">
+            <i class="fas fa-info-circle me-1"></i>
+            如何使用
+        </div>
+        <div class="card-body">
+            <h5>定时爬虫任务说明</h5>
+            <p>定时爬虫任务可以帮助您在指定的时间自动执行爬虫操作，按照设定的关键词和目标平台进行数据采集。</p>
+            
+            <h5>Cron表达式说明</h5>
+            <p>Cron表达式用于设置任务的执行时间，格式为：<code>分 时 日 月 周</code></p>
+            <ul>
+                <li><code>0 */12 * * *</code> - 每12小时执行一次（0点、12点）</li>
+                <li><code>0 2,14 * * *</code> - 每天凌晨2点和下午2点执行</li>
+                <li><code>0 2 * * *</code> - 每天凌晨2点执行</li>
+                <li><code>0 0 * * 0</code> - 每周日凌晨执行</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        // 数据表格初始化
+        $('#tasks-table').DataTable({
+            language: {
+                url: "//cdn.datatables.net/plug-ins/1.10.25/i18n/Chinese.json"
+            },
+            order: [[0, 'asc']]
+        });
+        
+        // 删除确认
+        $('.delete-form').on('submit', function(e) {
+            if (!confirm('确定要删除这个定时爬虫任务吗？此操作不可恢复。')) {
+                e.preventDefault();
+            }
+        });
+        
+        // 立即执行按钮点击事件
+        $('.run-task-form').on('submit', function(e) {
+            e.preventDefault(); // 阻止默认的表单提交
+            var form = $(this);
+            
+            if (confirm('确定要立即执行这个定时爬虫任务吗？')) {
+                // 使用jQuery的ajax方法发送POST请求
+                $.ajax({
+                    url: form.attr('action'),
+                    type: 'POST',
+                    success: function(response) {
+                        // 刷新页面以显示最新状态
+                        window.location.href = "{{ url_for('admin.scheduled_tasks') }}";
+                    },
+                    error: function(xhr, status, error) {
+                        alert('执行任务失败：' + error);
+                    }
+                });
+            }
+        });
+        
+        // 为了处理可能的直接链接点击，添加全局处理
+        $(document).on('click', 'a[href*="/scheduled_tasks/run/"]', function(e) {
+            e.preventDefault();
+            var url = $(this).attr('href');
+            
+            if (confirm('确定要立即执行这个定时爬虫任务吗？')) {
+                // 发送POST请求到相同URL
+                $.ajax({
+                    url: url,
+                    type: 'POST',
+                    success: function(response) {
+                        // 刷新页面以显示最新状态
+                        window.location.href = "{{ url_for('admin.scheduled_tasks') }}";
+                    },
+                    error: function(xhr, status, error) {
+                        alert('执行任务失败：' + error);
+                    }
+                });
+            }
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,165 @@
+{% extends 'admin/layout.html' %}
+
+{% block title %}直接爬取URL - 爬虫配置管理系统{% endblock %}
+
+{% block header %}直接爬取URL管理{% endblock %}
+
+{% block header_actions %}
+<a href="{{ url_for('admin.add_direct_url') }}" class="btn btn-primary">
+    <i class="fas fa-plus"></i> 添加直接爬取URL
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body">
+        <div class="mb-3">
+            <label for="scenarioFilter" class="form-label">按场景筛选：</label>
+            <select id="scenarioFilter" class="form-select">
+                <option value="">全部场景</option>
+                {% for scenario in scenarios %}
+                <option value="{{ scenario.id }}">{{ scenario.display_name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table table-hover" id="directUrlsTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>场景</th>
+                        <th>URL</th>
+                        <th>描述</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for direct_url in direct_urls %}
+                    <tr data-scenario="{{ direct_url.scenario_id }}">
+                        <td>{{ direct_url.id }}</td>
+                        <td>{{ direct_url.scenario_name }}</td>
+                        <td>
+                            <div class="text-truncate" style="max-width: 250px;">
+                                <a href="{{ direct_url.url }}" target="_blank" title="{{ direct_url.url }}">
+                                    {{ direct_url.url }}
+                                </a>
+                            </div>
+                        </td>
+                        <td>{{ direct_url.description }}</td>
+                        <td>
+                            {% if direct_url.is_active %}
+                            <span class="badge bg-success">启用</span>
+                            {% else %}
+                            <span class="badge bg-danger">禁用</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ direct_url.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>
+                            <div class="btn-group">
+                                <a href="{{ url_for('admin.edit_direct_url', direct_url_id=direct_url.id) }}" class="btn btn-sm btn-outline-primary" title="编辑">
+                                    <i class="fas fa-edit"></i>
+                                </a>
+                                <button type="button" class="btn btn-sm btn-outline-danger" title="删除" data-bs-toggle="modal" data-bs-target="#deleteModal{{ direct_url.id }}">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                                
+                                <!-- 添加启用/禁用按钮 -->
+                                <button type="button" class="btn btn-sm btn-outline-{{ 'warning' if direct_url.is_active else 'success' }}" 
+                                        title="{{ '禁用' if direct_url.is_active else '启用' }}" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#toggleModal{{ direct_url.id }}">
+                                    <i class="fas fa-{{ 'ban' if direct_url.is_active else 'check-circle' }}"></i>
+                                </button>
+                            </div>
+                            
+                            <!-- Toggle Modal -->
+                            <div class="modal fade" id="toggleModal{{ direct_url.id }}" tabindex="-1" aria-labelledby="toggleModalLabel{{ direct_url.id }}" aria-hidden="true">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="toggleModalLabel{{ direct_url.id }}">确认{{ '禁用' if direct_url.is_active else '启用' }}</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            确定要{{ '禁用' if direct_url.is_active else '启用' }}此直接爬取URL吗？
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                            <form action="{{ url_for('admin.toggle_direct_url', direct_url_id=direct_url.id) }}" method="post">
+                                                <button type="submit" class="btn btn-{{ 'warning' if direct_url.is_active else 'success' }}">
+                                                    确认{{ '禁用' if direct_url.is_active else '启用' }}
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Delete Modal -->
+                            <div class="modal fade" id="deleteModal{{ direct_url.id }}" tabindex="-1" aria-labelledby="deleteModalLabel{{ direct_url.id }}" aria-hidden="true">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="deleteModalLabel{{ direct_url.id }}">确认删除</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            确定要删除此直接爬取URL吗？此操作不可恢复。
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                            <form action="{{ url_for('admin.delete_direct_url', direct_url_id=direct_url.id) }}" method="post">
+                                                <button type="submit" class="btn btn-danger">确认删除</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css">
+<script type="text/javascript" src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+<script type="text/javascript" src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
+<script>
+    $(document).ready(function() {
+        // 初始化DataTables
+        var table = $('#directUrlsTable').DataTable({
+            "language": {
+                "url": "//cdn.datatables.net/plug-ins/1.13.4/i18n/zh.json"
+            },
+            "pageLength": 10,
+            "order": [[0, "desc"]]
+        });
+        
+        // 场景筛选功能
+        $('#scenarioFilter').on('change', function() {
+            var selectedScenario = $(this).val();
+            if (selectedScenario) {
+                table.column(1).search(selectedScenario).draw();
+            } else {
+                table.column(1).search('').draw();
+            }
+        });
+        
+        // 自动选择URL参数中指定的场景
+        var urlParams = new URLSearchParams(window.location.search);
+        var scenarioId = urlParams.get('scenario_id');
+        if (scenarioId) {
+            $('#scenarioFilter').val(scenarioId).trigger('change');
+        }
+    });
+</script>
+{% endblock %}

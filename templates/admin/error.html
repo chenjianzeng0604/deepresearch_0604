@@ -1,0 +1,36 @@
+{% extends 'admin/layout.html' %}
+
+{% block title %}错误 - 爬虫配置管理系统{% endblock %}
+
+{% block header %}系统错误{% endblock %}
+
+{% block content %}
+<div class="alert alert-danger">
+    <h4 class="alert-heading">{{ message }}</h4>
+    <p>{{ details }}</p>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <h5 class="card-title">常见解决方法</h5>
+        <ul>
+            <li>确保MySQL服务正在运行</li>
+            <li>验证环境变量设置正确:
+                <ul>
+                    <li>MYSQL_HOST (默认: localhost)</li>
+                    <li>MYSQL_PORT (默认: 3306)</li>
+                    <li>MYSQL_USER (默认: root)</li>
+                    <li>MYSQL_PASSWORD</li>
+                    <li>MYSQL_DB (默认: deepresearch)</li>
+                </ul>
+            </li>
+            <li>检查MySQL数据库是否存在并且配置正确</li>
+            <li>确保网络连接正常，防火墙没有阻止连接</li>
+        </ul>
+    </div>
+</div>
+
+<div class="mt-4">
+    <a href="{{ url_for('admin.login') }}" class="btn btn-primary">返回登录页面</a>
+</div>
+{% endblock %}
