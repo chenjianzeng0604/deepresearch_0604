@@ -76,11 +76,11 @@ class ScheduledCrawler:
         search_urls = self.agent.crawler_manager.config.get_search_url(scenario)
 
         if scenario == "healthcare":
-            platforms = ["web_site", "arxiv"]
+            platforms = ["web_site", "arxiv", "weixin"]
         elif scenario == "ai":
             platforms = ["web_site", "github", "arxiv", "weixin"]
         else:
-            platforms = ["web_site"]
+            platforms = ["web_site", "weixin"]
             
         start_time = datetime.now()
         logger.info(f"开始执行定时爬虫任务，时间: {start_time}, 关键词：{keywords}，平台：{platforms}, 场景：{scenario}")

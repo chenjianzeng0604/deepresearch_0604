@@ -104,36 +104,49 @@ class WebCrawler:
             # 广告、跟踪和分析
             '/ads/', '/ad/', 'doubleclick', 'analytics', 'tracker', 'click.php',
             'pixel.php', 'counter.php', 'utm_', 'adserv', 'banner', 'sponsor',
-            
             # 用户操作和账户页面
             'redirect', 'share', 'login', 'signup', 'register', 'comment', 
             'subscribe', 'newsletter', 'account', 'profile', 'password',
-            
+            "/dictionary/", "/translate/", "/grammar/", "/thesaurus/", 
             # 站点信息页
             'privacy', 'terms', 'about-us', 'contact-us', 'faq', 'help',
             'cookie', 'disclaimer', 'copyright', 'license', 'sitemap',
-            
+            "contact", "about", "privacy", "disclaimer",
             # 搜索引擎特定页面
             'www.bing.com/images/search', 'google.com/imgres',
             'search?', 'search/', '/search', 'query=', 'www.google.com/maps/search',
-            
+            'www.bing.com/translate', 'www.instagram.com/cambridgewords',
+            'dictionary.cambridge.org/plus', 'dictionary.cambridge.org/howto.html',
+            'www.google.com/shopping', 'support.google.com/googleshopping',
+            'www.bing.com/maps', 'www.bing.com/shop', 'go.microsoft.com/fwlink',
+            'bingapp.microsoft.com/bing', 'www.google.com/httpservice/retry/enablejs',
+            'www.google.com/travel/flights', 'maps.google.com/maps',
             # 社交媒体分享链接
             'facebook.com/sharer', 'twitter.com/intent', 'linkedin.com/share',
             'plus.google.com', 'pinterest.com/pin', 't.me/share',
-            
             # 打印、RSS和其他功能页面
             'print=', 'print/', 'print.html', 'rss', 'feed', 'atom',
             'pdf=', 'pdf/', 'download=', '/download', 'embed=',
-            
             # 日历、存档和分类页面
             'calendar', '/tag/', '/tags/', '/category/', '/categories/',
             '/archive/', '/archives/', '/author/', '/date/',
-            
             # 购物车、结账和交易页面
             'cart', 'checkout', 'basket', 'payment', 'order', 'transaction'
         ]
         if any(pattern in url.lower() for pattern in low_value_patterns):
             return False
+
+        search_engine_home = [
+            # 匹配所有Bing主页变体（含参数）
+            r'^https?://(www\.)?bing\.com/?(\?.*)?$',
+            r'^http?://(www\.)?bing\.com/?(\?.*)?$',
+            # 匹配所有Google主页变体（含参数）
+            r'^https?://(www\.)?google\.com/?(\?.*)?$'
+            r'^http?://(www\.)?google\.com/?(\?.*)?$'
+        ]
+        for pattern in search_engine_home:
+            if re.match(pattern, url, re.I):
+                return False
             
         return True
     
@@ -209,6 +222,8 @@ class WebCrawler:
                 href = a_tag['href']
                 absolute_url = urljoin(base_url, href)
                 if self.is_valid_url(absolute_url):
+                    if absolute_url in links:
+                        continue
                     links.append(absolute_url)
         except Exception as e:
             logger.error(f"提取链接出错: {base_url}, 错误: {str(e)}")
@@ -323,7 +338,6 @@ class WebCrawler:
                 logger.error(f"获取文章失败: {link}, 错误: {str(e)}")
                 return {"url": link, "content": "", "error": str(e)}
         
-        # 限制最大并行爬取数量，避免过载
         links_to_process = links[:min(self.crawler_max_links_result, len(links))]
         tasks = [fetch_article_with_semaphore(link) for link in links_to_process]
 
@@ -398,7 +412,6 @@ class WebCrawler:
                         
                         current_batch.append(data_item)
                         
-                        # 当达到批次大小时，处理并清空当前批次
                         if len(current_batch) >= batch_size:
                             try:
                                 success = await self.batch_save_to_milvus(
@@ -420,7 +433,6 @@ class WebCrawler:
             except Exception as e:
                 logger.error(f"处理文章时出错: {result['url']}, {str(e)}")
         
-        # 确保最后的批次也被处理
         if current_batch:
             success = await self.batch_save_to_milvus(
                 collection_name=collection_name, 
@@ -460,7 +472,7 @@ class WebCrawler:
         return [s[i:i+length] for i in range(0, len(s), length)]
     
     def is_pdf_url(self, url: str) -> bool:
-        return '/pdf/' in url
+        return '/pdf/' in url or url.endswith('.pdf')
     
     async def fetch_url_md(self, url: str) -> Optional[str]:
         """

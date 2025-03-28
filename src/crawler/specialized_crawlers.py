@@ -4,10 +4,12 @@
 import asyncio
 import logging
 import re
+import os
 import json
 from typing import Dict, List, Any, Optional, Set
 from urllib.parse import urlparse, urljoin, quote
 import aiohttp
+import requests
 
 from bs4 import BeautifulSoup
 
@@ -196,6 +198,7 @@ class GithubCrawler(WebCrawler):
     def __init__(self):
         """初始化GitHub爬虫"""
         super().__init__()
+        self.github_token = os.getenv("GITHUB_TOKEN")
     
     def is_github_url(self, url: str) -> bool:
         """
@@ -221,86 +224,86 @@ class GithubCrawler(WebCrawler):
         Returns:
             List[str]: 搜索结果列表
         """
-        # 对查询进行URL编码
-        encoded_query = quote(query)
-        
-        # 尝试两种不同的搜索URL
-        urls_to_try = [
-            f"https://github.com/search?q={encoded_query}&type=repositories",
-            f"https://api.github.com/search/repositories?q={encoded_query}&sort=stars&order=desc"
-        ]
-        
-        for search_url in urls_to_try:
+        repo_urls = await self.fetch_repos_by_github_search_api(query)
+        if not repo_urls:
+            repo_urls = await self.fetch_repos_by_github_search_url(query)
+        return repo_urls
+
+    async def fetch_repos_by_github_search_api(self, keyword):
+        url = "https://api.github.com/search/repositories"
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "Python-Script",
+            "Authorization": f"token {self.github_token}"
+        }
+        params = {
+            "q": keyword,
+            "sort": "stars",
+            "order": "desc",
+            "per_page": 1000
+        }
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            urls = []
+            for repo in data["items"]:
+                urls.append(repo['html_url'])
+            return urls
+        except Exception as e:
+            print(f"请求失败: {e}")
+        return []
+
+    async def fetch_repos_by_github_search_url(self, keyword):
+        encoded_query = quote(keyword)
+        search_url = f"https://github.com/search?q={encoded_query}&type=repositories"
+        try:       
+            html_content = await super().fetch_url(search_url)
+            if not html_content:
+                logger.warning(f"GitHub搜索请求失败:{search_url}")
+                return []
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            repo_urls = []
+            repo_items = []
+
             try:
-                html_content = await self.fetch_url(search_url)
-                if not html_content:
-                    logger.warning(f"GitHub搜索请求失败: {search_url}, 尝试下一个URL")
-                    continue
-                    
-                try:        
-                    soup = BeautifulSoup(html_content, 'html.parser')
-                    repo_urls = []
-                    repo_items = []
-                    try:
-                        repo_items = soup.find_all('li', class_='repo-list-item')
-                        if repo_items:
-                            logger.info(f"使用repo-list-item选择器找到 {len(repo_items)} 个项目")
-                    except Exception as e:
-                        logger.warning(f"repo-list-item选择器错误: {str(e)}")
-                    
-                    if not repo_items:
+                repo_items = soup.select('div[data-testid="results-list"] div')
+                if repo_items:
+                    logger.info(f"使用results-list选择器找到 {len(repo_items)} 个项目")
+            except Exception as e:
+                logger.error(f"results-list选择器错误: {str(e)}", exc_info=True)
+                
+            if not repo_items:
+                logger.warning(f"无法从GitHub页面解析仓库列表:{search_url}")
+                return []
+                
+            for idx, item in enumerate(repo_items):  
+                try:
+                    repo_link = None
+                    for selector in ['h3 a']:
                         try:
-                            repo_items = soup.select('div.Box-row')
-                            if repo_items:
-                                logger.info(f"使用Box-row选择器找到 {len(repo_items)} 个项目")
-                        except Exception as e:
-                            logger.warning(f"Box-row选择器错误: {str(e)}")
-                    
-                    if not repo_items:
-                        try:
-                            repo_items = soup.select('div[data-testid="results-list"] div')
-                            if repo_items:
-                                logger.info(f"使用results-list选择器找到 {len(repo_items)} 个项目")
-                        except Exception as e:
-                            logger.error(f"results-list选择器错误: {str(e)}", exc_info=True)
-                    
-                    if not repo_items:
-                        logger.warning(f"无法从GitHub页面解析仓库列表: {search_url}")
-                        continue
-                        
-                    count = 0
-                    for idx, item in enumerate(repo_items):  
-                        try:
-                            repo_link = None
-                            for selector in ['a.v-align-middle', 'a[data-hydro-click*="repository_click"]', 'h3 a']:
-                                try:
-                                    repo_link = item.select_one(selector)
-                                    if repo_link:
-                                        break
-                                except Exception:
-                                    continue
-                            
-                            if not repo_link:
-                                continue
-                                
-                            repo_url = urljoin("https://github.com", repo_link.get('href', ''))
-                            repo_urls.append(repo_url)
-                            count += 1
-                            
-                        except Exception as e:
-                            logger.warning(f"解析GitHub仓库信息时出错 (项目 {idx}): {str(e)}")
+                            repo_link = item.select_one(selector)
+                            if repo_link:
+                                break
+                        except Exception:
                             continue
                     
-                    if repo_urls:
-                        return repo_urls
+                    if not repo_link:
+                        continue
                         
+                    repo_url = urljoin("https://github.com", repo_link.get('href', ''))
+                    repo_urls.append(repo_url)
                 except Exception as e:
-                    logger.warning(f"解析GitHub HTML内容时出错: {str(e)}")
+                    logger.warning(f"解析GitHub仓库信息时出错 (项目 {idx}): {str(e)}")
                     continue
-                    
-            except Exception as e:
-                logger.warning(f"GitHub搜索错误 ({search_url}): {str(e)}")
-                continue
+            
+            if repo_urls:
+                return repo_urls[:1000]
+                
+        except Exception as e:
+            logger.warning(f"GitHub搜索错误 ({search_url}): {str(e)}")
+
         return []
 
 class WeChatOfficialAccountCrawler(WebCrawler):

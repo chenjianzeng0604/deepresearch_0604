@@ -170,8 +170,7 @@ class DeepresearchAgent:
                         search_url_formats = self.crawler_config.get_search_url_formats('online_search')
                         for search_engine, search_url_format in search_url_formats.items():
                             try:
-                                encoded_query = quote(query)
-                                search_url = search_url_format.format(encoded_query)
+                                search_url = search_url_format.format(quote(query))
                                 logger.info(f"从 {search_engine} 获取 '{query}' 相关文章，URL: {search_url}")
                                 web_crawler = self.crawler_manager.web_crawler
                                 links = await web_crawler.parse_sub_url(search_url)
@@ -206,7 +205,7 @@ class DeepresearchAgent:
                             search_results = list(search_unique_contents.values())
                             if search_results:
                                 iteration_results.extend(search_results)
-                                web_crawler.save_article(search_results, scenario)
+                                asyncio.create_task(web_crawler.save_article(search_results, scenario))
                                 logger.info(f"从搜索引擎获取到 {len(search_results)} 条新结果")
                     except Exception as e:
                         logger.error(f"爬取搜索结果时出错: {str(e)}", exc_info=True)
