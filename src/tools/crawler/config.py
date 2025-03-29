@@ -182,25 +182,10 @@ class CrawlerConfig:
         Returns:
             list: 可用平台列表
         """
-        # 如果有数据库连接，实时获取最新配置
         if hasattr(self, 'db_manager'):
             try:
                 platforms = self.db_manager.get_all_platforms()
                 return [p['name'] for p in platforms]
             except Exception as e:
                 logger.error(f"获取可用平台列表失败: {str(e)}")
-                
-        # 返回系统支持的所有爬取平台（备用方案）
-        return [
-            "web_site",      # 一般网站搜索
-            "github",        # GitHub代码搜索
-            "arxiv",         # ArXiv论文搜索
-            "stackoverflow", # Stack Overflow问答搜索
-            "news",          # 新闻搜索
-            "wechat",        # 微信公众号搜索
-            "hackernews",    # Hacker News搜索
-            "medium",        # Medium博客搜索
-            "github_repo",   # GitHub仓库内容搜索
-            "acm",           # ACM数字图书馆
-            "ieee"           # IEEE数字图书馆
-        ]
+        return []

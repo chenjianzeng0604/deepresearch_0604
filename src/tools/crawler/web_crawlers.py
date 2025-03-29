@@ -33,7 +33,7 @@ from src.model.llm_client import LLMClient
 from playwright.async_api import async_playwright
 from src.tools.crawler.cloudflare_bypass import CloudflareBypass
 from src.database.vectordb.schema_manager import MilvusSchemaManager
-from src.app.config import AppConfig
+from src.app.chat_bean import AppConfig
 from src.tools.crawler.config import CrawlerConfig
 import re
 from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM
@@ -457,28 +457,10 @@ class WebCrawler:
 
     async def batch_save_to_milvus(self, collection_name, schema, index_params, data):
         try:
-            # 检查并处理CollectionSchema对象，确保它能被正确处理
-            # 这解决了"'CollectionSchema' object is not subscriptable"错误
-            schema_dict = schema
-            if hasattr(schema, 'fields') and not isinstance(schema, dict):
-                # 转换CollectionSchema对象为字典格式
-                schema_dict = {
-                    "fields": [
-                        {attr: getattr(field, attr) for attr in dir(field) 
-                         if not attr.startswith('_') and not callable(getattr(field, attr))}
-                        for field in schema.fields
-                    ]
-                }
-                
-            # 同样处理index_params
-            index_params_dict = index_params
-            if not isinstance(index_params, dict) and hasattr(index_params, '__dict__'):
-                index_params_dict = vars(index_params)
-                
             success = self.milvus_dao.store(
                 collection_name=collection_name, 
-                schema=schema_dict, 
-                index_params=index_params_dict, 
+                schema=schema, 
+                index_params=index_params, 
                 data=data
             )
             if not success:
@@ -1100,50 +1082,22 @@ class GithubCrawler(WebCrawler):
         Returns:
             List[str]: 搜索结果列表
         """
-        repo_urls = await self.fetch_repos_by_github_search_api(query)
-        if not repo_urls:
-            repo_urls = await self.fetch_repos_by_github_search_url(query)
-        return repo_urls
-
-    async def fetch_repos_by_github_search_api(self, keyword):
-        url = "https://api.github.com/search/repositories"
-        headers = {
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "Python-Script",
-            "Authorization": f"token {self.github_token}"
-        }
-        params = {
-            "q": keyword,
-            "sort": "stars",
-            "order": "desc",
-            "per_page": 1000
-        }
+        logger.info(f"搜索GitHub仓库: {query}")
+        
+        # GitHub搜索URL
+        search_url = f"https://github.com/search?q={quote(query)}"
+        
         try:
-            response = requests.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            urls = []
-            for repo in data["items"]:
-                urls.append(repo['html_url'])
-            return urls
-        except Exception as e:
-            print(f"请求失败: {e}")
-        return []
-
-    async def fetch_repos_by_github_search_url(self, keyword):
-        encoded_query = quote(keyword)
-        search_url = f"https://github.com/search?q={encoded_query}&type=repositories"
-        try:       
-            html_content = await super().fetch_url_with_proxy_fallback(search_url)
+            html_content = await self.fetch_url_with_proxy_fallback(search_url)
             if not html_content:
-                logger.warning(f"GitHub搜索请求失败:{search_url}")
+                logger.error(f"无法获取GitHub搜索结果: {search_url}")
                 return []
-            
+                
             soup = BeautifulSoup(html_content, 'html.parser')
             
             # 提取搜索结果
             results = []
-            articles = soup.select('.news-box .news-list li')
+            articles = soup.select('.repo-list-item')
             
             for article in articles:
                 try:
@@ -1163,9 +1117,8 @@ class GithubCrawler(WebCrawler):
             return results
             
         except Exception as e:
-            logger.error(f"GitHub搜索错误 ({search_url}): {str(e)}")
-
-        return []
+            logger.error(f"搜索GitHub仓库出错: {query}, 错误: {str(e)}", exc_info=True)
+            return []
 
 class WeChatOfficialAccountCrawler(WebCrawler):
     """
@@ -1247,6 +1200,27 @@ class CrawlerManager:
         self.web_crawler = WebCrawler()
         self.wechat_crawler = WeChatOfficialAccountCrawler()
         
+    def get_platforms_by_scenario(self, scenario: str) -> List[str]:
+        """
+        根据场景获取对应的平台列表
+        
+        Args:
+            scenario: 场景名称，如 'general', 'academic', 'news' 等
+            
+        Returns:
+            List[str]: 该场景下应该使用的平台列表
+        """
+        try:
+            if hasattr(self.config, 'db_manager') and self.config.db_manager:
+                platforms = self.config.db_manager.get_platforms_by_scenario_name(scenario)
+                if platforms:
+                    logger.info(f"从数据库获取场景'{scenario}'的平台: {platforms}")
+                    return platforms
+            return []  
+        except Exception as e:
+            logger.error(f"获取场景'{scenario}'对应平台时出错: {str(e)}")
+            return []
+
     async def search(self, platform, query, session_id=None):
         """
         根据平台选择合适的爬虫进行搜索

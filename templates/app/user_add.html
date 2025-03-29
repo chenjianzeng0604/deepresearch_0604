@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}添加用户 - 深度研究管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="card-title">添加新用户</h4>
+                    <div class="card-tools">
+                        <a href="{{ url_for('admin.users_list') }}" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-arrow-left"></i> 返回用户列表
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% include 'partials/flash_messages.html' %}
+                    
+                    <form method="post" action="{{ url_for('admin.user_add') }}">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label for="username">用户名</label>
+                                    <input type="text" class="form-control" id="username" name="username" value="{{ request.form.username }}" placeholder="用户名">
+                                    <small class="form-text text-muted">可选，用户可通过用户名或手机号登录</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="phone">手机号</label>
+                                    <input type="text" class="form-control" id="phone" name="phone" value="{{ request.form.phone }}" placeholder="手机号码" required>
+                                    <small class="form-text text-muted">必填，11位手机号码</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="email">邮箱</label>
+                                    <input type="email" class="form-control" id="email" name="email" value="{{ request.form.email }}" placeholder="邮箱地址">
+                                    <small class="form-text text-muted">可选，用于接收通知和找回密码</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="password">密码</label>
+                                    <input type="password" class="form-control" id="password" name="password" placeholder="密码" required>
+                                    <small class="form-text text-muted">必填，至少6个字符</small>
+                                </div>
+                                <div class="form-group">
+                                    <button type="submit" class="btn btn-primary">创建用户</button>
+                                    <a href="{{ url_for('admin.users_list') }}" class="btn btn-secondary">取消</a>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <h5 class="card-title">用户说明</h5>
+                                    </div>
+                                    <div class="card-body">
+                                        <ul>
+                                            <li>新建用户将默认处于激活状态</li>
+                                            <li>用户名可以为空，用户可以使用手机号登录</li>
+                                            <li>手机号必须唯一，不能与已有用户重复</li>
+                                            <li>添加用户后，该用户可以使用手机号和密码登录系统</li>
+                                            <li>用户可以通过定时爬虫功能设置关键词和平台，系统将在每天凌晨2点和下午2点自动执行爬虫操作</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        // 设置菜单高亮
+        $("#nav-users").addClass("active");
+    });
+</script>
+{% endblock %}

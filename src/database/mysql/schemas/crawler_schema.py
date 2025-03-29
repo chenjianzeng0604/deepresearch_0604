@@ -11,7 +11,8 @@ CRAWLER_SCHEMA = {
     "crawler_admin_users": """
         CREATE TABLE IF NOT EXISTS crawler_admin_users (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) UNIQUE NOT NULL,
+            phone VARCHAR(20) UNIQUE NOT NULL,
+            username VARCHAR(50) NULL,
             password VARCHAR(255) NOT NULL,
             email VARCHAR(100),
             display_name VARCHAR(100),
@@ -19,6 +20,20 @@ CRAWLER_SCHEMA = {
             last_login TIMESTAMP NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    """,
+    
+    # 验证码表
+    "verification_codes": """
+        CREATE TABLE IF NOT EXISTS verification_codes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            phone VARCHAR(20) NOT NULL,
+            code VARCHAR(10) NOT NULL,
+            purpose ENUM('register', 'login', 'reset') NOT NULL,
+            is_used BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_active_code (phone, purpose, is_used)
         )
     """,
     
@@ -100,6 +115,63 @@ CRAWLER_SCHEMA = {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (scenario_id) REFERENCES crawler_scenarios(id) ON DELETE CASCADE
         )
+    """,
+    
+    # 场景与平台关联表（多对多关系）
+    "crawler_scenario_platforms": """
+        CREATE TABLE IF NOT EXISTS crawler_scenario_platforms (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            scenario_id INT NOT NULL,
+            platform_id INT NOT NULL,
+            priority INT DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (scenario_id) REFERENCES crawler_scenarios(id) ON DELETE CASCADE,
+            FOREIGN KEY (platform_id) REFERENCES crawler_platforms(id) ON DELETE CASCADE,
+            UNIQUE KEY unique_scenario_platform (scenario_id, platform_id)
+        )
+    """,
+    
+    # 场景与URL格式关联表（多对多关系）
+    "crawler_scenario_url_formats": """
+        CREATE TABLE IF NOT EXISTS crawler_scenario_url_formats (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            scenario_id INT NOT NULL,
+            url_format_id INT NOT NULL,
+            priority INT DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (scenario_id) REFERENCES crawler_scenarios(id) ON DELETE CASCADE,
+            FOREIGN KEY (url_format_id) REFERENCES crawler_url_formats(id) ON DELETE CASCADE,
+            UNIQUE KEY unique_scenario_url_format (scenario_id, url_format_id)
+        )
+    """,
+    
+    # 聊天会话表
+    "chat_sessions": """
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id VARCHAR(50) PRIMARY KEY,
+            user_id INT NOT NULL,
+            title VARCHAR(255) DEFAULT '未命名会话',
+            last_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES crawler_admin_users(id) ON DELETE CASCADE
+        )
+    """,
+    
+    # 聊天消息表
+    "chat_messages": """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            session_id VARCHAR(50) NOT NULL,
+            role VARCHAR(20) NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        )
     """
 }
 
@@ -115,13 +187,13 @@ def init_crawler_default_data(connection):
                 cursor.execute(
                     """
                     INSERT INTO crawler_admin_users 
-                    (username, password, email, is_active) 
+                    (phone, password, email, is_active) 
                     VALUES (%s, %s, %s, %s)
                     """,
-                    ("admin", default_password, "admin@example.com", True)
+                    ("13800138000", default_password, "admin@example.com", True)
                 )
                 connection.commit()
-                logger.info("已创建默认管理员账户 (用户名: admin, 密码: admin123)")
+                logger.info("已创建默认管理员账户 (手机号: 13800138000, 密码: admin123)")
         return True
     except Exception as e:
         logger.error(f"初始化爬虫默认数据失败: {str(e)}")

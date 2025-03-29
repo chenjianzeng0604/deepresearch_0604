@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}用户详情 - 深度研究管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="card-title">用户详情</h4>
+                    <div class="card-tools">
+                        <a href="{{ url_for('admin.users_list') }}" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-arrow-left"></i> 返回用户列表
+                        </a>
+                        <a href="{{ url_for('admin.user_edit', user_id=user.id) }}" class="btn btn-primary btn-sm">
+                            <i class="fas fa-edit"></i> 编辑用户
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% include 'partials/flash_messages.html' %}
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5 class="card-title">基本信息</h5>
+                                </div>
+                                <div class="card-body">
+                                    <table class="table">
+                                        <tr>
+                                            <th style="width: 30%">用户ID</th>
+                                            <td>{{ user.id }}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>用户名</th>
+                                            <td>{{ user.username if user.username else '未设置' }}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>手机号</th>
+                                            <td>{{ user.phone }}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>邮箱</th>
+                                            <td>{{ user.email if user.email else '未设置' }}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>状态</th>
+                                            <td>
+                                                {% if user.is_active %}
+                                                <span class="badge badge-success">激活</span>
+                                                {% else %}
+                                                <span class="badge badge-danger">禁用</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <th>注册时间</th>
+                                            <td>{{ user.created_at }}</td>
+                                        </tr>
+                                        <tr>
+                                            <th>最后更新时间</th>
+                                            <td>{{ user.updated_at }}</td>
+                                        </tr>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        // 设置菜单高亮
+        $("#nav-users").addClass("active");
+    });
+</script>
+{% endblock %}

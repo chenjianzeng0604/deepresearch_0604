@@ -3,11 +3,12 @@
 
 import os
 import asyncio
-import logging
 import sys
+import json
 import argparse
+import logging
+import asyncio
 from pathlib import Path
-from dotenv import load_dotenv
 
 # 将项目根目录添加到Python路径
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -18,32 +19,22 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from src.app.news_processor import NewsProcessor
+from src.admin.crawler_processor import CrawlerProcessor
 from src.config.app_config import AppConfig
 from src.tools.distribution.factory import create_distribution_manager
-from src.utils.formatters import format_report
 from src.tools.crawler.scheduled_crawler import start_scheduler, stop_scheduler
 from src.tools.crawler.config import CrawlerConfig
 
 # 加载环境变量
 load_dotenv()
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")),
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(os.path.join("data", "logs", "crawler.log"), encoding="utf-8")
-    ]
-)
-logger = logging.getLogger(__name__)
+# 设置日志
+from src.utils.log_utils import setup_logging
+logger = setup_logging(app_name="crawler_cli")
 
 # 确保必要的目录存在
-os.makedirs("data/logs", exist_ok=True)
-os.makedirs("data/reports", exist_ok=True)
-os.makedirs("data/reports/images", exist_ok=True)
-os.makedirs("data/knowledge_base", exist_ok=True)
+from src.utils.file_utils import ensure_app_directories
+ensure_app_directories()
 
 async def generate_report_cmd(args):
     """
@@ -54,8 +45,8 @@ async def generate_report_cmd(args):
     """
     try:
         logger.info(f"开始生成报告: {args.topic}")
-        processor = NewsProcessor(config=AppConfig.from_env())
-        async for update in processor.process_tech_news_stream(
+        processor = CrawlerProcessor(config=AppConfig.from_env())
+        async for update in processor.process_crawl_stream(
             topic=args.topic,
             include_platforms = ["web_site", "search", "github", "arxiv", "weibo", "weixin", "twitter"]
         ):
@@ -72,7 +63,7 @@ async def list_reports_cmd(args):
         args: 命令行参数
     """
     try:
-        processor = NewsProcessor(config=AppConfig.from_env())
+        processor = CrawlerProcessor(config=AppConfig.from_env())
         reports = await processor.list_reports(
             limit=args.limit,
             filter_type=args.type
@@ -113,7 +104,7 @@ async def distribute_report_cmd(report_id=None, platforms=None):
     """
     try:
         config = AppConfig.from_env()
-        processor = NewsProcessor(config=config)
+        processor = CrawlerProcessor(config=config)
         distribution_manager = create_distribution_manager(config.distribution)
         report = await processor.get_report(report_id)
         if not report:

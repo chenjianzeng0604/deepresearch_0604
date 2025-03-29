@@ -20,7 +20,7 @@ ROOT_DIR = Path(__file__).parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
 from src.model.llm_client import LLMClient
-from src.app.config import AppConfig
+from src.app.chat_bean import AppConfig
 from src.tools.crawler.web_crawlers import CrawlerManager
 from src.session.session_manager import SessionManager
 from src.session.message_manager import MessageManager
@@ -29,9 +29,9 @@ from src.database.vectordb.milvus_dao import MilvusDao
 from src.token.token_counter import TokenCounter
 from src.tools.crawler.config import CrawlerConfig
 from src.tools.crawler.scheduled_crawler import ScheduledCrawler
-from src.app.response import ChatMessage
+from src.app.chat_bean import ChatMessage
 from src.tools.crawler.web_crawlers import WebCrawler
-from src.app.response import ChatResponse
+from src.app.chat_bean import ChatResponse
 from src.utils.json_parser import str2Json
 from src.prompts.prompt_templates import PromptTemplates
 from urllib.parse import quote
@@ -178,7 +178,6 @@ class DeepresearchAgent:
             if results:
                 # 发送起始信息
                 yield {"type": "status", "content": "信息检索完成，开始生成深度分析...", "phase": "analysis_start"}
-                yield {"type": "content", "content": f"## 基于您的查询: \"{query}\"\n\n以下是我找到的相关信息和分析：\n\n"}
                 
                 # 生成引用信息
                 sources = []
@@ -196,51 +195,16 @@ class DeepresearchAgent:
                 if sources:
                     yield {"type": "sources", "content": sources}
                 
+                # 收集所有内容但不分段发送
                 all_summaries = []
-                
-                # 逐个处理和发送研究结果的内容
-                for i, result in enumerate(results):
+                for result in results:
                     if 'content' in result and result['content']:
-                        # 发送每个结果的状态更新
-                        yield {"type": "status", "content": f"正在处理第 {i+1}/{len(results)} 条结果...", "phase": "analysis_start"}
-                        
-                        # 添加结果标题和来源信息
-                        result_title = f"### 来自 {result.get('platform', '未知来源')} 的相关内容：\n\n"
-                        yield {"type": "content", "content": result_title}
-                        
-                        # 分段发送内容（每300字符左右一段）
-                        content = result['content']
-                        all_summaries.append(content)
-                        
-                        # 如果内容很长，分段发送
-                        if len(content) > 500:
-                            # 按句子或段落分割
-                            segments = re.split(r'(?<=[.。!！?？])\s+', content)
-                            current_segment = ""
-                            
-                            for segment in segments:
-                                current_segment += segment + " "
-                                
-                                # 当积累了一定长度的内容，发送出去
-                                if len(current_segment) >= 300:
-                                    yield {"type": "content", "content": current_segment.strip() + "\n\n"}
-                                    current_segment = ""
-                            
-                            # 发送最后剩余的内容
-                            if current_segment:
-                                yield {"type": "content", "content": current_segment.strip() + "\n\n"}
-                        else:
-                            # 内容较短，直接发送
-                            yield {"type": "content", "content": content + "\n\n"}
-                        
-                        # 添加引用
-                        if i < len(sources):
-                            yield {"type": "content", "content": f"*来源：[{sources[i]['title']}]({sources[i]['url']})*\n\n"}
+                        all_summaries.append(result['content'])
                 
                 # 准备深度分析
                 if all_summaries:
                     # 准备深度分析提示
-                    yield {"type": "status", "content": "正在生成综合分析...", "phase": "analysis_deep"}
+                    yield {"type": "status", "content": "正在生成思考与分析...", "phase": "analysis_deep"}
                     
                     # 构建分析上下文，包含历史对话和研究内容
                     analysis_context = {
@@ -255,25 +219,41 @@ class DeepresearchAgent:
                         context=json.dumps(analysis_context) if chat_history else ""
                     )
                     
-                    # 使用流式生成生成深度分析
-                    buffer = ""  # 用于缓冲少量token，以获得更流畅的体验
-                    buffer_limit = 5  # 只在缓冲区积累少量token后发送
+                    # 使用流式生成生成深度分析，并添加重试机制
+                    max_retries = 3
+                    retry_count = 0
                     
-                    # 添加分析标题
-                    yield {"type": "content", "content": "## 综合分析\n\n"}
-                    
-                    # 流式生成分析内容
-                    async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
-                        buffer += chunk
-                        
-                        # 当缓冲区达到一定大小或收到特定标记时，发送数据
-                        if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer or '，' in buffer or '.' in buffer or ',' in buffer:
-                            yield {"type": "content", "content": buffer}
-                            buffer = ""
-                    
-                    # 发送剩余的缓冲区内容
-                    if buffer:
-                        yield {"type": "content", "content": buffer}
+                    while retry_count < max_retries:
+                        try:
+                            # 流式生成分析内容
+                            buffer = ""  # 用于缓冲少量token，以获得更流畅的体验
+                            buffer_limit = 10  # 缓冲更多token后再发送，减少请求频率
+                            
+                            async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
+                                buffer += chunk
+                                
+                                # 当缓冲区达到一定大小或收到特定标记时，发送数据
+                                if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
+                                    yield {"type": "content", "content": buffer}
+                                    buffer = ""
+                            
+                            # 发送剩余的缓冲区内容
+                            if buffer:
+                                yield {"type": "content", "content": buffer}
+                            
+                            # 成功完成，跳出重试循环
+                            break
+                            
+                        except Exception as e:
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                logger.warning(f"流式连接出错，正在进行第{retry_count}次重试: {str(e)}")
+                                yield {"type": "status", "content": f"连接出错，正在重试({retry_count}/{max_retries})...", "phase": "retry"}
+                                await asyncio.sleep(1)  # 等待1秒后重试
+                            else:
+                                logger.error(f"流式连接最终失败: {str(e)}")
+                                yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
+                                raise
                     
                     # 标记分析完成
                     yield {"type": "status", "content": "深度分析生成完成", "phase": "analysis_complete"}
@@ -292,20 +272,26 @@ class DeepresearchAgent:
                         role = "用户" if msg.get("role") == "user" else "助手"
                         prompt += f"{role}: {msg.get('content', '')}\n\n"
                 
-                # 流式生成回复
-                buffer = ""
-                async for chunk in self.llm_client.generate_with_streaming(prompt):
-                    buffer += chunk
-                    if len(buffer) >= 5 or '\n' in buffer or '。' in buffer or '.' in buffer:
+                try:
+                    buffer = ""
+                    buffer_limit = 10
+                    
+                    async for chunk in self.llm_client.generate_with_streaming(prompt):
+                        buffer += chunk
+                        if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
+                            yield {"type": "content", "content": buffer}
+                            buffer = ""
+                    
+                    # 发送剩余的缓冲区内容
+                    if buffer:
                         yield {"type": "content", "content": buffer}
-                        buffer = ""
-                
-                if buffer:
-                    yield {"type": "content", "content": buffer}
+                        
+                except Exception as e:
+                    logger.error(f"流式连接最终失败: {str(e)}")
+                    yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
         except Exception as e:
-            logger.error(f"生成流式响应时出错: {str(e)}", exc_info=True)
-            yield {"type": "error", "content": f"生成回复时发生错误: {str(e)}", "phase": "response_error"}
-            yield {"type": "content", "content": f"抱歉，处理您的查询'{query}'时遇到错误。错误详情: {str(e)}"}
+            logger.error(f"生成响应时出错: {str(e)}", exc_info=True)
+            yield {"type": "error", "content": f"生成响应时出错: {str(e)}"}
 
     async def _get_conversation_history(self) -> List[Dict[str, str]]:
         """
@@ -434,13 +420,13 @@ class DeepresearchAgent:
                 search_count = 0
             
             iteration_count += 1
+
+        # 异步保存到向量数据库，不阻塞主流程
+        asyncio.create_task(self._async_save_to_vectordb(query, intent, all_results.copy()))
         
         # 裁剪结果到限制数量
         if len(all_results) > self.summary_limit:
             all_results = all_results[:self.summary_limit]
-        
-        # 异步保存到向量数据库，不阻塞主流程
-        asyncio.create_task(self._async_save_to_vectordb(query, all_results.copy()))
         
         if not all_results:
             yield {"type": "status", "content": "未找到相关信息", "phase": "no_results"}
@@ -450,7 +436,7 @@ class DeepresearchAgent:
         # 不用return，改用yield返回最终结果
         yield {"type": "research_results", "data": {"results": all_results}}
 
-    async def _async_save_to_vectordb(self, query, results):
+    async def _async_save_to_vectordb(self, query, scenario, results):
         """
         异步将研究结果保存到向量数据库，不阻塞主流程
         
@@ -458,48 +444,16 @@ class DeepresearchAgent:
             query: 用户查询
             results: 研究结果
         """
+        if not results:
+            return
+        if len(results) > self.vectordb_limit:
+            results = results[:self.vectordb_limit]
         try:
-            await self._save_to_vectordb(query, results)
-            logger.info(f"成功异步保存研究结果到向量数据库: {query[:30]}...")
+            self.crawler_manager.web_crawler.save_article(results, scenario)
+            logger.info(f"成功异步保存研究结果到向量数据库: query={query}, scenario={scenario}")
         except Exception as e:
             logger.error(f"异步保存到向量数据库时出错: {str(e)}", exc_info=True)
             # 异步执行不能使用yield，只记录日志不影响主流程
-
-    async def _save_to_vectordb(self, query, results):
-        """
-        将研究结果保存到向量数据库
-        
-        Args:
-            query: 用户查询
-            results: 研究结果
-        """
-        # 如果结果为空，不进行保存
-        if not results:
-            return
-            
-        # 裁剪结果到向量数据库限制数量
-        if len(results) > self.vectordb_limit:
-            results = results[:self.vectordb_limit]
-            
-        # 转换结果为向量存储格式
-        vector_data = []
-        for idx, result in enumerate(results):
-            # 转换为向量存储需要的格式
-            item = {
-                "id": f"{self.session_id}_{idx}",
-                "query": query,
-                "content": result.get("content", ""),
-                "title": result.get("title", ""),
-                "url": result.get("url", ""),
-                "platform": result.get("platform", ""),
-                "session_id": self.session_id,
-                "timestamp": datetime.now().isoformat()
-            }
-            vector_data.append(item)
-            
-        # 保存到向量数据库
-        collection_name = f"research_{datetime.now().strftime('%Y%m%d')}"
-        await self.milvus_dao.store(collection_name, vector_data)
 
     async def _evaluate_information_sufficiency(self, query, results):
         """
@@ -635,36 +589,32 @@ class DeepresearchAgent:
         Returns:
             List[str]: 适合的平台组合
         """
-        # 如果用户指定了平台，优先使用用户指定的平台
-        if hasattr(message, 'platforms') and message.platforms:
-            return message.platforms
-        
         # 获取所有可用平台
         available_platforms = self.crawler_config.get_available_platforms()
         
-        # 根据意图选择平台
-        if intent == "research" or intent == "academic":
-            # 学术研究类查询，优先使用学术和代码平台
-            platforms = [p for p in available_platforms if p in ["arxiv", "github", "web_site", "stackoverflow", "github_repo", "acm", "ieee"]]
-        elif intent == "news" or intent == "current_events":
-            # 新闻类查询，优先使用新闻和社交媒体平台
-            platforms = [p for p in available_platforms if p in ["news", "web_site", "wechat", "hackernews", "medium"]]
-        elif intent == "tech" or intent == "programming":
-            # 技术类查询，优先使用技术平台
-            platforms = [p for p in available_platforms if p in ["github", "stackoverflow", "web_site", "hackernews", "medium"]]
-        elif intent == "product" or intent == "review":
-            # 产品类查询，优先使用评测和技术博客平台
-            platforms = [p for p in available_platforms if p in ["web_site", "medium", "hackernews"]]
-        else:
-            # 默认使用全网搜索
-            platforms = [p for p in available_platforms if p in ["web_site", "github", "arxiv"]]
+        # 从数据库获取该意图对应的场景
+        scenario = intent  # 意图名称作为场景名称
+        
+        # 根据场景从数据库获取平台配置
+        try:
+            # 尝试从数据库获取场景对应的平台
+            platforms = self.crawler_manager.get_platforms_by_scenario(scenario)
+            logger.info(f"从数据库获取场景 '{scenario}' 的平台: {platforms}")
+        except Exception as e:
+            logger.error(f"从数据库获取平台时出错: {str(e)}")
+            # 发生错误时使用默认平台
+            platforms = []
+        
+        # 确保平台列表中的平台在可用平台列表中
+        platforms = [p for p in platforms if p in available_platforms]
         
         # 确保至少有一个平台
         if not platforms:
             platforms = ["web_site"]
+            logger.warning(f"未找到场景 '{scenario}' 对应的平台，使用默认平台: {platforms}")
             
         # 限制平台数量，避免请求过多
-        max_platforms = int(os.getenv("MAX_SEARCH_PLATFORMS", "3"))
+        max_platforms = int(os.getenv("MAX_SEARCH_PLATFORMS", "6"))
         if len(platforms) > max_platforms:
             platforms = platforms[:max_platforms]
         

@@ -1,0 +1,147 @@
+{% extends "admin/layout.html" %}
+
+{% block title %}用户详情 - 深度研究管理后台{% endblock %}
+
+{% block header %}用户详情{% endblock %}
+
+{% block header_actions %}
+<div class="btn-group">
+    <a href="{{ url_for('admin.users_list') }}" class="btn btn-secondary">
+        <i class="fas fa-arrow-left"></i> 返回用户列表
+    </a>
+    <a href="{{ url_for('admin.user_edit', user_id=user.id) }}" class="btn btn-primary">
+        <i class="fas fa-edit"></i> 编辑用户
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title">基本信息</h5>
+            </div>
+            <div class="card-body">
+                <table class="table">
+                    <tr>
+                        <th style="width: 30%">用户ID</th>
+                        <td>{{ user.id }}</td>
+                    </tr>
+                    <tr>
+                        <th>用户名</th>
+                        <td>{{ user.username if user.username else '未设置' }}</td>
+                    </tr>
+                    <tr>
+                        <th>手机号</th>
+                        <td>{{ user.phone }}</td>
+                    </tr>
+                    <tr>
+                        <th>邮箱</th>
+                        <td>{{ user.email if user.email else '未设置' }}</td>
+                    </tr>
+                    <tr>
+                        <th>状态</th>
+                        <td>
+                            {% if user.is_active %}
+                            <span class="badge bg-success">激活</span>
+                            {% else %}
+                            <span class="badge bg-danger">禁用</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>注册时间</th>
+                        <td>{{ user.created_at }}</td>
+                    </tr>
+                    <tr>
+                        <th>最后更新时间</th>
+                        <td>{{ user.updated_at }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title">定时爬虫任务</h5>
+            </div>
+            <div class="card-body">
+                {% set tasks = get_user_scheduled_tasks(user.id) if get_user_scheduled_tasks is defined else [] %}
+                {% if tasks %}
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>关键词</th>
+                                <th>平台</th>
+                                <th>执行时间</th>
+                                <th>创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for task in tasks %}
+                            <tr>
+                                <td>{{ task.keywords }}</td>
+                                <td>{{ task.platforms }}</td>
+                                <td>{{ task.schedule }}</td>
+                                <td>{{ task.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="text-muted">该用户尚未设置定时爬虫任务</p>
+                    <p>定时爬虫功能允许用户设置关键词和平台，系统将在每天凌晨2点和下午2点自动执行爬虫操作。</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="card-title">操作</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('admin.user_edit', user_id=user.id) }}" class="btn btn-primary">
+                        <i class="fas fa-edit"></i> 编辑用户
+                    </a>
+                    {% if user.id != session.user_id %}
+                    <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                        <i class="fas fa-trash"></i> 删除用户
+                    </button>
+                    {% else %}
+                    <button type="button" class="btn btn-danger" disabled>
+                        <i class="fas fa-trash"></i> 不能删除当前登录用户
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 删除确认模态框 -->
+{% if user.id != session.user_id %}
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel">确认删除</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                您确定要删除用户 "{{ user.username if user.username else user.phone }}" 吗？此操作不可撤销。
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <form action="{{ url_for('admin.user_delete', user_id=user.id) }}" method="post">
+                    <button type="submit" class="btn btn-danger">确认删除</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

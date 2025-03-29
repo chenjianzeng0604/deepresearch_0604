@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录/注册 - 深度研究助手</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+        .login-container {
+            max-width: 450px;
+            margin: 80px auto;
+            padding: 30px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        .app-logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .app-logo img {
+            width: 80px;
+            height: 80px;
+        }
+        .form-title {
+            text-align: center;
+            font-weight: 600;
+            margin-bottom: 25px;
+            color: #333;
+        }
+        .input-group {
+            margin-bottom: 20px;
+        }
+        .input-group-text {
+            background-color: #f8f9fa;
+            border-right: none;
+        }
+        .form-control {
+            border-left: none;
+        }
+        .form-control:focus {
+            box-shadow: none;
+            border-color: #ced4da;
+        }
+        .btn-primary {
+            background-color: #0056b3;
+            border-color: #0056b3;
+            width: 100%;
+            padding: 10px;
+            font-weight: 500;
+        }
+        .btn-primary:hover {
+            background-color: #004494;
+            border-color: #004494;
+        }
+        .form-switch {
+            margin-top: 15px;
+            margin-bottom: 20px;
+        }
+        .verification-code {
+            display: flex;
+            gap: 10px;
+        }
+        .get-code-btn {
+            white-space: nowrap;
+        }
+        .password-toggle {
+            cursor: pointer;
+        }
+        .toggle-form {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        .toggle-form a {
+            color: #0056b3;
+            text-decoration: none;
+        }
+        .toggle-form a:hover {
+            text-decoration: underline;
+        }
+        #message-container {
+            display: none;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="login-container">
+            <div class="app-logo">
+                <h2>深度研究助手</h2>
+            </div>
+            
+            <div id="message-container" class="alert" role="alert"></div>
+            
+            <!-- 登录表单 -->
+            <div id="login-form">
+                <h4 class="form-title">用户登录</h4>
+                <form id="form-login" method="post">
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-phone"></i></span>
+                        <input type="text" class="form-control" id="login-phone" name="phone" placeholder="请输入手机号码" required>
+                    </div>
+                    
+                    <div class="verification-code">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
+                            <input type="text" class="form-control" id="login-code" name="code" placeholder="验证码" required>
+                        </div>
+                        <button type="button" class="btn btn-outline-primary get-code-btn" id="get-login-code">获取验证码</button>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary mt-3">登录</button>
+                </form>
+                
+                <div class="toggle-form">
+                    <p>还没有账号？<a href="#" id="show-register">立即注册</a></p>
+                </div>
+            </div>
+            
+            <!-- 注册表单 -->
+            <div id="register-form" style="display: none;">
+                <h4 class="form-title">用户注册</h4>
+                <form id="form-register" method="post">
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-phone"></i></span>
+                        <input type="text" class="form-control" id="register-phone" name="phone" placeholder="请输入手机号码" required>
+                    </div>
+                    
+                    <div class="verification-code">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
+                            <input type="text" class="form-control" id="register-code" name="code" placeholder="验证码" required>
+                        </div>
+                        <button type="button" class="btn btn-outline-primary get-code-btn" id="get-register-code">获取验证码</button>
+                    </div>
+                    
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                        <input type="password" class="form-control" id="register-password" name="password" placeholder="请设置密码" required>
+                        <span class="input-group-text password-toggle" id="register-password-toggle">
+                            <i class="bi bi-eye"></i>
+                        </span>
+                    </div>
+                    
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-person"></i></span>
+                        <input type="text" class="form-control" id="register-username" name="username" placeholder="用户名（选填）">
+                    </div>
+                    
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-envelope"></i></span>
+                        <input type="email" class="form-control" id="register-email" name="email" placeholder="邮箱（选填）">
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary mt-3">注册</button>
+                </form>
+                
+                <div class="toggle-form">
+                    <p>已有账号？<a href="#" id="show-login">立即登录</a></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 表单切换
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+            const showRegister = document.getElementById('show-register');
+            const showLogin = document.getElementById('show-login');
+            
+            showRegister.addEventListener('click', function(e) {
+                e.preventDefault();
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+            });
+            
+            showLogin.addEventListener('click', function(e) {
+                e.preventDefault();
+                registerForm.style.display = 'none';
+                loginForm.style.display = 'block';
+            });
+            
+            // 密码显示切换
+            const registerPasswordToggle = document.getElementById('register-password-toggle');
+            const registerPassword = document.getElementById('register-password');
+            
+            registerPasswordToggle.addEventListener('click', function() {
+                const type = registerPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+                registerPassword.setAttribute('type', type);
+                this.querySelector('i').classList.toggle('bi-eye');
+                this.querySelector('i').classList.toggle('bi-eye-slash');
+            });
+            
+            // 获取登录验证码
+            const getLoginCodeBtn = document.getElementById('get-login-code');
+            getLoginCodeBtn.addEventListener('click', function() {
+                const phone = document.getElementById('login-phone').value;
+                if (!phone) {
+                    showMessage('请输入手机号码', 'danger');
+                    return;
+                }
+                
+                sendVerificationCode(phone, 'login');
+                startCountdown(this);
+            });
+            
+            // 获取注册验证码
+            const getRegisterCodeBtn = document.getElementById('get-register-code');
+            getRegisterCodeBtn.addEventListener('click', function() {
+                const phone = document.getElementById('register-phone').value;
+                if (!phone) {
+                    showMessage('请输入手机号码', 'danger');
+                    return;
+                }
+                
+                sendVerificationCode(phone, 'register');
+                startCountdown(this);
+            });
+            
+            // 登录表单提交
+            const loginFormEl = document.getElementById('form-login');
+            loginFormEl.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const phone = document.getElementById('login-phone').value;
+                const code = document.getElementById('login-code').value;
+                
+                if (!phone || !code) {
+                    showMessage('请填写完整的登录信息', 'danger');
+                    return;
+                }
+                
+                login(phone, code);
+            });
+            
+            // 注册表单提交
+            const registerFormEl = document.getElementById('form-register');
+            registerFormEl.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const phone = document.getElementById('register-phone').value;
+                const code = document.getElementById('register-code').value;
+                const password = document.getElementById('register-password').value;
+                const username = document.getElementById('register-username').value;
+                const email = document.getElementById('register-email').value;
+                
+                if (!phone || !code || !password) {
+                    showMessage('请填写必要的注册信息', 'danger');
+                    return;
+                }
+                
+                register(phone, code, password, username, email);
+            });
+            
+            // 发送验证码
+            function sendVerificationCode(phone, purpose) {
+                fetch('/api/client/send_verification_code', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        phone: phone,
+                        purpose: purpose
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showMessage('验证码已发送，请注意查收', 'success');
+                    } else {
+                        showMessage(data.message || '发送验证码失败', 'danger');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showMessage('发送验证码失败，请稍后重试', 'danger');
+                });
+            }
+            
+            // 登录
+            function login(phone, code) {
+                fetch('/api/client/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        phone: phone,
+                        code: code
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showMessage('登录成功，正在跳转...', 'success');
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1500);
+                    } else {
+                        showMessage(data.message || '登录失败', 'danger');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showMessage('登录失败，请稍后重试', 'danger');
+                });
+            }
+            
+            // 注册
+            function register(phone, code, password, username, email) {
+                fetch('/api/client/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        phone: phone,
+                        code: code,
+                        password: password,
+                        username: username || null,
+                        email: email || null
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showMessage('注册成功，请登录', 'success');
+                        setTimeout(() => {
+                            registerForm.style.display = 'none';
+                            loginForm.style.display = 'block';
+                        }, 1500);
+                    } else {
+                        showMessage(data.message || '注册失败', 'danger');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showMessage('注册失败，请稍后重试', 'danger');
+                });
+            }
+            
+            // 显示消息
+            function showMessage(message, type) {
+                const messageContainer = document.getElementById('message-container');
+                messageContainer.textContent = message;
+                messageContainer.className = `alert alert-${type}`;
+                messageContainer.style.display = 'block';
+                
+                setTimeout(() => {
+                    messageContainer.style.display = 'none';
+                }, 3000);
+            }
+            
+            // 倒计时
+            function startCountdown(button) {
+                let count = 60;
+                button.disabled = true;
+                const originalText = button.textContent;
+                
+                const interval = setInterval(() => {
+                    count--;
+                    button.textContent = `${count}秒后重试`;
+                    
+                    if (count <= 0) {
+                        clearInterval(interval);
+                        button.disabled = false;
+                        button.textContent = originalText;
+                    }
+                }, 1000);
+            }
+        });
+    </script>
+</body>
+</html>
