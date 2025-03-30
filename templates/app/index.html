@@ -52,10 +52,34 @@
             transition: all 0.4s ease;
             background-color: #f8fafc;
         }
+        
+        .header h1 {
+            color: var(--primary-color);
+            font-size: 1.2rem;
+            font-weight: 500;
+            margin: 0;
+            letter-spacing: 0.5px;
+            display: inline-block;
+            margin-left: 10px;
+            margin-top: 10px;
+        }
+        
+        /* 聊天界面 */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background-color: #f8fafc;
+            overflow: hidden;
+            position: relative;
+            height: 100vh;
+            width: 100%;
+            border-radius: 0;
+            transition: margin-left 0.3s ease, width 0.3s ease;
+        }
 
         /* 主要导航栏 */
         .top-navbar {
-            position: fixed;
             top: 0;
             left: 0;
             right: 0;
@@ -78,6 +102,8 @@
             padding: 0 10px;
             background-color: #ffffff;
             border-bottom: 1px solid #eaeaea;
+            z-index: 1;
+            position: relative;
         }
         
         /* 导航按钮样式 */
@@ -91,6 +117,7 @@
             margin-right: 5px;
             border-radius: 4px;
             transition: background-color 0.2s;
+            z-index: 2;
         }
         
         .nav-button:hover {
@@ -100,30 +127,38 @@
         .topbar-actions {
             display: flex;
             align-items: center;
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 2;
         }
         
         /* 会话标题 */
         .chat-title-container {
-            flex: 1;
-            text-align: center;
-            font-size: 1.1rem;
-            font-weight: 500;
-            color: var(--text-primary);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 60%;
-            margin: 0 10px;
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 1;
         }
         
         .chat-title {
             display: inline-block;
             padding: 4px 12px;
             border-radius: 15px;
-            max-width: 100%;
+            max-width: 70%;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font-weight: 500;
+            color: var(--text-primary);
+            pointer-events: auto;
         }
 
         /* 历史会话侧边栏 */
@@ -131,14 +166,13 @@
             position: fixed;
             top: 0;
             left: -100%; 
-            width: 300px;
+            width: 260px;
             height: 100%;
             background-color: #fff;
             box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
-            z-index: 998;
+            z-index: 999;
             transition: all 0.3s ease;
             overflow-y: auto;
-            padding-top: 60px;
         }
 
         .history-sidebar.open {
@@ -212,7 +246,7 @@
             width: 100%;
             height: 100%;
             background-color: rgba(0, 0, 0, 0.3);
-            z-index: 997; /* 略低于侧边栏 */
+            z-index: 997;
             display: none;
         }
 
@@ -706,10 +740,6 @@
                 padding: 0;
             }
             
-            .header h1 {
-                font-size: 1.5rem;
-            }
-            
             .message {
                 max-width: 95%;
                 padding: 12px;
@@ -828,6 +858,128 @@
             }
         }
         
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            .user-info-area {
+                padding: 10px 12px;
+            }
+            
+            .user-display-name {
+                font-size: 13px;
+                padding-left: 20px;
+            }
+            
+            .user-display-name::before {
+                font-size: 12px;
+            }
+            
+            .logout-item {
+                padding: 6px;
+            }
+            
+            .logout-item i {
+                font-size: 15px;
+            }
+        }
+
+        /* 响应式断点 */
+        @media (min-width: 769px) {
+            /* 使用flex布局实现自适应 */
+            .container {
+                display: flex;
+                flex-direction: row;
+                width: 100%;
+            }
+            
+            /* PC端默认展开 */
+            .history-sidebar {
+                position: relative; /* 改为相对定位 */
+                left: 0;
+                box-shadow: none;
+                border-right: 1px solid var(--border-color);
+                width: 260px;
+                flex-shrink: 0;
+                transition: width 0.3s ease, transform 0.3s ease;
+            }
+            
+            /* 主内容区域自适应宽度 */
+            .chat-container {
+                flex: 1;
+                width: auto; /* 自适应宽度 */
+                transition: margin 0.3s ease;
+            }
+        
+            /* PC端侧边栏收起状态 */
+            .history-sidebar.collapsed {
+                width: 0;
+                overflow: hidden;
+            }
+        }
+
+        @media (max-width: 768px) {
+            /* 使用flex布局实现自适应 */
+            .container {
+                display: flex;
+                flex-direction: row;
+                width: 100%;
+            }
+            
+             /* 主内容区域自适应宽度 */
+             .chat-container {
+                flex: 1;
+                width: auto; /* 自适应宽度 */
+                transition: margin 0.3s ease;
+            }
+            
+            /* 移动端展开时的遮罩层 */
+            .overlay.sidebar-overlay {
+                display: block;
+                background: rgba(0, 0, 0, 0.3);
+                z-index: 1;
+            }
+        }
+
+        /* 侧边栏动画优化 */
+        .history-sidebar {
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            will-change: transform;
+        }
+
+        /* 移动端侧边栏宽度 */
+        @media (max-width: 768px) {
+            .history-sidebar {
+                width: 280px;
+                transform: translateX(-100%);
+            }
+            
+            .history-sidebar.open {
+                transform: translateX(0);
+                box-shadow: 4px 0 15px rgba(0,0,0,0.1);
+            }
+        }
+
+        /* PC端hover效果 */
+        @media (min-width: 769px) {
+            .history-sidebar {
+                transition: width 0.3s ease;
+            }
+            
+            /* 折叠状态 */
+            .history-sidebar.collapsed {
+                width: 0px;
+            }
+            
+            .history-sidebar.collapsed .history-item-title,
+            .history-sidebar.collapsed .user-display-name {
+                display: none;
+            }
+            
+            .history-sidebar.collapsed .history-item {
+                padding: 12px;
+                text-align: center;
+            }
+        }
+        
         /* 移动端欢迎消息样式调整 */
         @media (max-width: 768px) {
             .welcome-message {
@@ -901,93 +1053,6 @@
         
         .toggle-progress.expanded {
             transform: rotate(180deg);
-        }
-        
-        /* 用户认证相关样式 */
-        .user-menu-button {
-            background: none;
-            border: none;
-            color: var(--primary-color);
-            cursor: pointer;
-            padding: 8px 12px;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            font-size: 14px;
-        }
-        
-        .user-menu-button:hover {
-            background-color: rgba(0,0,0,0.03);
-        }
-        
-        .user-menu-button i {
-            margin-right: 6px;
-        }
-        
-        .auth-modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            z-index: 1100;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .auth-modal.active {
-            display: flex;
-        }
-        
-        .auth-modal-content {
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-            width: 100%;
-            max-width: 400px;
-            padding: 25px;
-            position: relative;
-        }
-        
-        .auth-modal-close {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            font-size: 20px;
-            color: #999;
-            background: none;
-            border: none;
-            cursor: pointer;
-        }
-        
-        .auth-tabs {
-            display: flex;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #eee;
-        }
-        
-        .auth-tab {
-            flex: 1;
-            text-align: center;
-            padding: 10px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        
-        .auth-tab.active {
-            color: var(--primary-color);
-            border-bottom: 2px solid var(--primary-color);
-        }
-        
-        .auth-form {
-            display: none;
-        }
-        
-        .auth-form.active {
-            display: block;
         }
         
         .form-group {
@@ -1127,158 +1192,22 @@
         .logout-item:hover i {
             color: var(--primary-dark);
         }
-
-        /* 移动端适配 */
-        @media (max-width: 768px) {
-            .user-info-area {
-                padding: 10px 12px;
-            }
-            
-            .user-display-name {
-                font-size: 13px;
-                padding-left: 20px;
-            }
-            
-            .user-display-name::before {
-                font-size: 12px;
-            }
-            
-            .logout-item {
-                padding: 6px;
-            }
-            
-            .logout-item i {
-                font-size: 15px;
-            }
-        }
-
-        /* 响应式断点 */
-        @media (min-width: 769px) {
-            /* PC端默认展开 */
-            .history-sidebar {
-                left: 0;
-                box-shadow: none;
-                border-right: 1px solid var(--border-color);
-            }
-            
-            /* 主内容区域偏移 */
-            .chat-container {
-                margin-left: 300px;
-                transition: margin 0.3s ease;
-            }
-
-             /* PC端展开时调整导航栏按钮 */
-             .history-sidebar.open + .chat-container {
-                margin-left: 300px;
-            }
-
-            /* PC端展开时调整导航栏按钮 */
-            .history-sidebar.collapsed + .chat-container {
-                margin-left: 0px;
-            }
-
-           
-            
-            /* 隐藏移动端关闭按钮 */
-            .sidebar-close-btn {
-                display: none;
-            }
-        }
-
-        @media (max-width: 768px) {
-            /* 移动端默认收起 */
-            .history-sidebar {
-                left: -280px;
-            }
-            
-            /* 移动端关闭按钮样式 */
-            .sidebar-close-btn {
-                position: absolute;
-                right: 15px;
-                top: 15px;
-                background: rgba(0,0,0,0.05);
-                border: none;
-                border-radius: 50%;
-                width: 36px;
-                height: 36px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                transition: all 0.3s ease;
-            }
-            
-            .sidebar-close-btn:hover {
-                background: rgba(0,0,0,0.1);
-            }
-            
-            /* 移动端展开时的遮罩层 */
-            .overlay.sidebar-overlay {
-                display: block;
-                background: rgba(0, 0, 0, 0.3);
-                z-index: 999;
-            }
-        }
-
-        /* 侧边栏动画优化 */
-        .history-sidebar {
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            will-change: transform;
-        }
-
-        /* 移动端侧边栏宽度 */
-        @media (max-width: 768px) {
-            .history-sidebar {
-                width: 280px;
-                transform: translateX(-100%);
-            }
-            
-            .history-sidebar.open {
-                transform: translateX(0);
-            }
-        }
-
-        /* PC端hover效果 */
-        @media (min-width: 769px) {
-            .history-sidebar {
-                transition: width 0.3s ease;
-            }
-            
-            /* 折叠状态 */
-            .history-sidebar.collapsed {
-                width: 0px;
-            }
-            
-            .history-sidebar.collapsed .history-item-title,
-            .history-sidebar.collapsed .user-display-name {
-                display: none;
-            }
-            
-            .history-sidebar.collapsed .history-item {
-                padding: 12px;
-                text-align: center;
-            }
-        }
     </style>
 </head>
 <body>
     <div class="container" id="app-container">
-        <!-- 顶部导航栏 -->
-        <div class="top-navbar">
-            <button class="nav-button" id="historyToggle">
-                <i class="fas fa-bars"></i>
-            </button>
-            <div class="chat-title-container">
-                <p class="chat-title" id="chat-title"></p>
-            </div>
-            <div class="topbar-actions">
-                <button class="nav-button" id="newChatButton">
-                    <i class="fas fa-plus"></i>
-                </button>
-            </div>
-        </div>
         <!-- 历史会话侧边栏 -->
         <div class="history-sidebar" id="history-sidebar">
+            <div class="top-navbar" id="top-navbar">
+                <div class="header">
+                    <h1><i class="fas fa-brain"></i> 深度研究助手</h1>
+                </div>
+                <div class="topbar-actions">
+                    <button class="nav-button" id="closeButton">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                </div>
+            </div>
             <div class="history-list" id="history-list">
                 <!-- 历史会话将通过JS动态加载 -->
             </div>
@@ -1291,6 +1220,20 @@
         </div>
         <!-- 聊天界面 -->
         <div class="chat-container">
+            <!-- 顶部导航栏 -->
+            <div class="top-navbar">
+                <button class="nav-button" id="historyToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="chat-title-container">
+                    <p class="chat-title" id="chat-title"></p>
+                </div>
+                <div class="topbar-actions">
+                    <button class="nav-button" id="newChatButton">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+            </div>
             <div class="chat-messages" id="chat-messages">
                 <!-- 全屏欢迎消息 -->
                 <div class="message assistant-message welcome-message">
@@ -1304,9 +1247,9 @@
                     <i class="fas fa-paper-plane"></i>
                 </button>
             </div>
+            <!-- 遮罩层 -->
+            <div class="overlay" id="overlay"></div>
         </div>
-          <!-- 遮罩层 -->
-          <div class="overlay" id="overlay"></div>
     </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -1322,10 +1265,12 @@
         const sendButton = document.getElementById('send-button');
         const messagesContainer = document.getElementById('chat-messages');
         const historyToggle = document.getElementById('historyToggle');
+        const closeButton = document.getElementById('closeButton');
         const historySidebar = document.getElementById('history-sidebar');
         const historyList = document.getElementById('history-list');
         const newChatButton = document.getElementById('newChatButton');
         const overlay = document.getElementById('overlay');
+        const topNavbar = document.getElementById('top-navbar');
         
         // 使用sessionStorage存储当前会话ID
         let sessionId = sessionStorage.getItem('current_session_id');
@@ -1339,6 +1284,12 @@
             const isMobile = window.matchMedia("(max-width: 768px)").matches;
             if (!isMobile) {
                 historySidebar.classList.add('open');
+                historySidebar.classList.remove('collapsed');
+                appContainer.classList.add('sidebar-open');
+                loadHistorySessions();
+                historyToggle.style.display = "none";
+                closeButton.style.display = "block";
+                topNavbar.style.display = "block";
             }
         }
         initSidebarState();
@@ -1354,25 +1305,52 @@
         }
 
         function toggleSidebar() {
+            const isMobile = window.matchMedia("(max-width: 768px)").matches;
             if (historySidebar.classList.contains('open')) {
                 historySidebar.classList.remove('open');
-                historySidebar.classList.toggle('collapsed');
+                if (!isMobile) {
+                    historySidebar.classList.add('collapsed');
+                    appContainer.classList.remove('sidebar-open');
+                    historyToggle.style.display = "block";
+                    closeButton.style.display = "none";
+                } else {
+                    overlay.classList.remove('sidebar-overlay');
+                }
             } else {
-                loadHistorySessions();
-                historySidebar.classList.toggle('open');
+                historySidebar.classList.add('open');
                 historySidebar.classList.remove('collapsed');
+                if (!isMobile) {
+                    topNavbar.style.display = "block";
+                    appContainer.classList.add('sidebar-open');
+                    historyToggle.style.display = "none";
+                    closeButton.style.display = "block";
+                } else {
+                    topNavbar.style.display = "none";
+                    overlay.classList.add('sidebar-overlay');
+                }
+                loadHistorySessions();
             }
         }
 
         historyToggle.addEventListener('click', toggleSidebar);
+        closeButton.addEventListener('click', toggleSidebar);
         overlay.addEventListener('click', toggleSidebar);
         document.addEventListener('click', handleOutsideClick);
-        
+
         window.addEventListener('resize', () => {
             const isMobile = window.matchMedia("(max-width: 768px)").matches;
-            if (!isMobile && !historySidebar.classList.contains('open')) {
-                historySidebar.classList.add('open');
+            if (!isMobile) {
+                if (!historySidebar.classList.contains('open') && !historySidebar.classList.contains('collapsed')) {
+                    historySidebar.classList.add('open');
+                    appContainer.classList.add('sidebar-open');
+                }
                 overlay.classList.remove('sidebar-overlay');
+            } else {
+                // 移动端模式下，移除PC端特有的类
+                appContainer.classList.remove('sidebar-open');
+                if (historySidebar.classList.contains('open')) {
+                    overlay.classList.add('sidebar-overlay');
+                }
             }
         });
 
@@ -1411,7 +1389,8 @@
                             // 兼容方式：从消息数组中查找第一条用户消息
                             const firstMessage = session.messages.find(msg => msg.role === 'user')?.content;
                             if (firstMessage) {
-                                sessionTitle = firstMessage.length > 30 ? firstMessage.substring(0, 30): firstMessage;
+                                sessionTitle = firstMessage.length > 30 ? 
+                                    firstMessage.substring(0, 30): firstMessage;
                             }
                         }
                         
@@ -2002,8 +1981,6 @@
         const authModal = document.getElementById('authModal');
         const authModalClose = document.getElementById('authModalClose');
         const overlay = document.getElementById('overlay');
-        const authTabBtns = document.querySelectorAll('.auth-tab-btn');
-        const authTabContents = document.querySelectorAll('.auth-tab-content');
         const loginForm = document.getElementById('loginForm');
         const registerForm = document.getElementById('registerForm');
         const loginSendCodeBtn = document.getElementById('loginSendCodeBtn');
@@ -2064,4 +2041,3 @@
 </script>
 </body>
 </html>
-        
