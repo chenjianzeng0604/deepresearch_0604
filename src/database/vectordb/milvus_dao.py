@@ -1,7 +1,7 @@
 import logging
 import time
-from typing import List, Dict, Any, Union, Optional, Callable
-
+from typing import List, Dict, Any, Optional, Callable
+import os
 from pymilvus import MilvusClient
 
 logger = logging.getLogger(__name__)
@@ -15,47 +15,6 @@ class MilvusDao:
     - 集合的创建和管理
     - 数据插入和查询
     - 向量搜索
-    
-    示例用法:
-    ```python
-    # 创建 MilvusDao 实例
-    milvus_dao = MilvusDao(
-        uri="http://localhost:19530",
-        user="",
-        password="",
-        db_name="default"
-    )
-    
-    # 定义集合架构
-    schema = {
-        "fields": [
-            {"name": "id", "type": "VARCHAR", "is_primary": True, "max_length": 100},
-            {"name": "content", "type": "VARCHAR", "max_length": 65535},
-            {"name": "content_emb", "type": "FLOAT_VECTOR", "dim": 768}
-        ]
-    }
-    
-    # 定义索引参数
-    index_params = {
-        "index_type": "IVF_FLAT",
-        "metric_type": "L2",
-        "params": {"nlist": 1024}
-    }
-    
-    # 存储数据
-    data = [
-        {"id": "1", "content": "示例内容1", "content_emb": [0.1, 0.2, ..., 0.768]},
-        {"id": "2", "content": "示例内容2", "content_emb": [0.2, 0.3, ..., 0.768]}
-    ]
-    milvus_dao.store(collection_name="my_collection", schema=schema, 
-                    index_params=index_params, data=data)
-    
-    # 搜索数据
-    search_data = [{"content_emb": [0.1, 0.2, ..., 0.768]}]
-    results = milvus_dao.search(collection_name="my_collection", 
-                               data=search_data, 
-                               output_fields=["id", "content"])
-    ```
     """
     
     def __init__(self, 
@@ -67,19 +26,6 @@ class MilvusDao:
                  reconnect_attempts: int = 3,
                  reconnect_delay: int = 2,
                  embedding_generator: Optional[Callable[[List[str]], List[List[float]]]] = None):
-        """
-        初始化MilvusDao
-        
-        Args:
-            uri: Milvus服务器URI，默认为"http://localhost:19530"
-            user: Milvus用户名，默认为空
-            password: Milvus密码，默认为空
-            db_name: 数据库名称，默认为"default"
-            token: 访问令牌，默认为None
-            reconnect_attempts: 重连尝试次数，默认为3
-            reconnect_delay: 重连延迟(秒)，默认为2
-            embedding_generator: 可选的嵌入向量生成器函数，接收文本列表并返回嵌入向量列表
-        """
         self.uri = uri
         self.user = user
         self.password = password
@@ -526,3 +472,12 @@ class MilvusDao:
                 logger.info("已关闭Milvus客户端连接")
             except Exception as e:
                 logger.error(f"关闭Milvus客户端连接时出错: {str(e)}")
+
+milvus_dao = MilvusDao(
+    uri=os.getenv("MILVUS_URI", "http://localhost:19530"),
+    user=os.getenv("MILVUS_USER", ""),
+    password=os.getenv("MILVUS_PASSWORD", ""),
+    db_name=os.getenv("MILVUS_DB_NAME", "default"),
+    reconnect_attempts=int(os.getenv("MILVUS_RECONNECT_ATTEMPTS", "3")),
+    reconnect_delay=int(os.getenv("MILVUS_RECONNECT_DELAY", "2"))
+)

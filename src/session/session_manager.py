@@ -28,8 +28,6 @@ class SessionManager(MySQLBase):
                     if table_name in ['sessions', 'session_categories', 'session_tags']:
                         cursor.execute(create_sql)
                         logger.debug(f"创建或确认表存在: {table_name}")
-                
-                logger.info("会话相关表初始化成功")
         except Exception as e:
             logger.error(f"会话相关表初始化失败: {str(e)}")
             raise
@@ -142,3 +140,5 @@ class SessionManager(MySQLBase):
         except Exception as e:
             logger.error(f"删除会话失败: {str(e)}")
             return False
+
+session_manager = SessionManager()

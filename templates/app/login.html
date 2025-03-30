@@ -88,6 +88,38 @@
             display: none;
             margin-bottom: 15px;
         }
+        .login-type-tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .login-type-tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            cursor: pointer;
+            color: #6c757d;
+            position: relative;
+        }
+        .login-type-tab.active {
+            color: #0056b3;
+            font-weight: 500;
+        }
+        .login-type-tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background-color: #0056b3;
+        }
+        .login-type-content {
+            display: none;
+        }
+        .login-type-content.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -103,17 +135,41 @@
             <div id="login-form">
                 <h4 class="form-title">用户登录</h4>
                 <form id="form-login" method="post">
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="bi bi-phone"></i></span>
-                        <input type="text" class="form-control" id="login-phone" name="phone" placeholder="请输入手机号码" required>
+                    <div class="login-type-tabs">
+                        <div class="login-type-tab active" data-type="phone">手机号登录</div>
+                        <div class="login-type-tab" data-type="account">账号密码登录</div>
                     </div>
                     
-                    <div class="verification-code">
+                    <!-- 手机号登录 -->
+                    <div class="login-type-content active" id="phone-login">
                         <div class="input-group">
-                            <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
-                            <input type="text" class="form-control" id="login-code" name="code" placeholder="验证码" required>
+                            <span class="input-group-text"><i class="bi bi-phone"></i></span>
+                            <input type="text" class="form-control" id="login-phone" name="phone" placeholder="请输入手机号码" required>
                         </div>
-                        <button type="button" class="btn btn-outline-primary get-code-btn" id="get-login-code">获取验证码</button>
+                        
+                        <div class="verification-code">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
+                                <input type="text" class="form-control" id="login-code" name="code" placeholder="验证码" required>
+                                <button type="button" class="btn btn-outline-primary get-code-btn" id="get-login-code">获取验证码</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 账号密码登录 -->
+                    <div class="login-type-content" id="account-login">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-person"></i></span>
+                            <input type="text" class="form-control" id="login-username" name="username" placeholder="请输入用户名" required>
+                        </div>
+                        
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                            <input type="password" class="form-control" id="login-password" name="password" placeholder="请输入密码" required>
+                            <span class="input-group-text password-toggle" id="login-password-toggle">
+                                <i class="bi bi-eye"></i>
+                            </span>
+                        </div>
                     </div>
 
                     <button type="submit" class="btn btn-primary mt-3">登录</button>
@@ -137,10 +193,9 @@
                         <div class="input-group">
                             <span class="input-group-text"><i class="bi bi-shield-lock"></i></span>
                             <input type="text" class="form-control" id="register-code" name="code" placeholder="验证码" required>
+                            <button type="button" class="btn btn-outline-primary get-code-btn" id="get-register-code">获取验证码</button>
                         </div>
-                        <button type="button" class="btn btn-outline-primary get-code-btn" id="get-register-code">获取验证码</button>
                     </div>
-                    
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-lock"></i></span>
                         <input type="password" class="form-control" id="register-password" name="password" placeholder="请设置密码" required>
@@ -151,12 +206,12 @@
                     
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-person"></i></span>
-                        <input type="text" class="form-control" id="register-username" name="username" placeholder="用户名（选填）">
+                        <input type="text" class="form-control" id="register-username" name="username" placeholder="用户名" required>
                     </div>
                     
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-envelope"></i></span>
-                        <input type="email" class="form-control" id="register-email" name="email" placeholder="邮箱（选填）">
+                        <input type="email" class="form-control" id="register-email" name="email" placeholder="邮箱" required>
                     </div>
                     
                     <button type="submit" class="btn btn-primary mt-3">注册</button>
@@ -178,6 +233,13 @@
             const showRegister = document.getElementById('show-register');
             const showLogin = document.getElementById('show-login');
             
+            // 设置初始状态的required属性
+            // 默认是手机号登录，设置phone和code为required
+            document.getElementById('login-phone').setAttribute('required', '');
+            document.getElementById('login-code').setAttribute('required', '');
+            document.getElementById('login-username').removeAttribute('required');
+            document.getElementById('login-password').removeAttribute('required');
+            
             showRegister.addEventListener('click', function(e) {
                 e.preventDefault();
                 loginForm.style.display = 'none';
@@ -190,13 +252,70 @@
                 loginForm.style.display = 'block';
             });
             
-            // 密码显示切换
+            // 登录类型切换
+            const loginTypeTabs = document.querySelectorAll('.login-type-tab');
+            const loginTypeContents = document.querySelectorAll('.login-type-content');
+            let currentLoginType = 'phone'; // 默认登录类型
+            
+            loginTypeTabs.forEach(tab => {
+                tab.addEventListener('click', function() {
+                    // 移除所有标签的active类
+                    loginTypeTabs.forEach(t => t.classList.remove('active'));
+                    // 给当前点击的标签添加active类
+                    this.classList.add('active');
+                    
+                    // 获取当前登录类型
+                    currentLoginType = this.getAttribute('data-type');
+                    
+                    // 隐藏所有内容
+                    loginTypeContents.forEach(content => content.classList.remove('active'));
+                    // 显示对应内容
+                    document.getElementById(currentLoginType + '-login').classList.add('active');
+                    
+                    // 根据登录类型设置表单字段的required属性
+                    if (currentLoginType === 'phone') {
+                        // 手机号登录：phone和code必填，username和password不必填
+                        document.getElementById('login-phone').setAttribute('required', '');
+                        document.getElementById('login-code').setAttribute('required', '');
+                        document.getElementById('login-username').removeAttribute('required');
+                        document.getElementById('login-password').removeAttribute('required');
+                    } else {
+                        // 账号密码登录：username和password必填，phone和code不必填
+                        document.getElementById('login-phone').removeAttribute('required');
+                        document.getElementById('login-code').removeAttribute('required');
+                        document.getElementById('login-username').setAttribute('required', '');
+                        document.getElementById('login-password').setAttribute('required', '');
+                    }
+                });
+            });
+            
+            // 页面加载时设置初始状态的required属性
+            document.addEventListener('DOMContentLoaded', function() {
+                // 默认是手机号登录，设置phone和code为required
+                document.getElementById('login-phone').setAttribute('required', '');
+                document.getElementById('login-code').setAttribute('required', '');
+                document.getElementById('login-username').removeAttribute('required');
+                document.getElementById('login-password').removeAttribute('required');
+            });
+            
+            // 密码显示切换 - 注册表单
             const registerPasswordToggle = document.getElementById('register-password-toggle');
             const registerPassword = document.getElementById('register-password');
             
             registerPasswordToggle.addEventListener('click', function() {
                 const type = registerPassword.getAttribute('type') === 'password' ? 'text' : 'password';
                 registerPassword.setAttribute('type', type);
+                this.querySelector('i').classList.toggle('bi-eye');
+                this.querySelector('i').classList.toggle('bi-eye-slash');
+            });
+            
+            // 密码显示切换 - 登录表单
+            const loginPasswordToggle = document.getElementById('login-password-toggle');
+            const loginPassword = document.getElementById('login-password');
+            
+            loginPasswordToggle.addEventListener('click', function() {
+                const type = loginPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+                loginPassword.setAttribute('type', type);
                 this.querySelector('i').classList.toggle('bi-eye');
                 this.querySelector('i').classList.toggle('bi-eye-slash');
             });
@@ -232,15 +351,29 @@
             loginFormEl.addEventListener('submit', function(e) {
                 e.preventDefault();
                 
-                const phone = document.getElementById('login-phone').value;
-                const code = document.getElementById('login-code').value;
-                
-                if (!phone || !code) {
-                    showMessage('请填写完整的登录信息', 'danger');
-                    return;
+                if (currentLoginType === 'phone') {
+                    // 手机号登录
+                    const phone = document.getElementById('login-phone').value;
+                    const code = document.getElementById('login-code').value;
+                    
+                    if (!phone || !code) {
+                        showMessage('请填写完整的登录信息', 'danger');
+                        return;
+                    }
+                    
+                    loginWithPhone(phone, code);
+                } else {
+                    // 账号密码登录
+                    const username = document.getElementById('login-username').value;
+                    const password = document.getElementById('login-password').value;
+                    
+                    if (!username || !password) {
+                        showMessage('请填写完整的登录信息', 'danger');
+                        return;
+                    }
+                    
+                    loginWithAccount(username, password);
                 }
-                
-                login(phone, code);
             });
             
             // 注册表单提交
@@ -254,7 +387,7 @@
                 const username = document.getElementById('register-username').value;
                 const email = document.getElementById('register-email').value;
                 
-                if (!phone || !code || !password) {
+                if (!phone || !code || !password || !username) {
                     showMessage('请填写必要的注册信息', 'danger');
                     return;
                 }
@@ -288,8 +421,8 @@
                 });
             }
             
-            // 登录
-            function login(phone, code) {
+            // 手机号登录
+            function loginWithPhone(phone, code) {
                 fetch('/api/client/login', {
                     method: 'POST',
                     headers: {
@@ -297,7 +430,8 @@
                     },
                     body: JSON.stringify({
                         phone: phone,
-                        code: code
+                        code: code,
+                        login_type: 'phone'
                     })
                 })
                 .then(response => response.json())
@@ -306,7 +440,37 @@
                         showMessage('登录成功，正在跳转...', 'success');
                         setTimeout(() => {
                             window.location.href = '/';
-                        }, 1500);
+                        }, 500);
+                    } else {
+                        showMessage(data.message || '登录失败', 'danger');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showMessage('登录失败，请稍后重试', 'danger');
+                });
+            }
+            
+            // 账号密码登录
+            function loginWithAccount(username, password) {
+                fetch('/api/client/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password,
+                        login_type: 'account'
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showMessage('登录成功，正在跳转...', 'success');
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 500);
                     } else {
                         showMessage(data.message || '登录失败', 'danger');
                     }
@@ -328,7 +492,7 @@
                         phone: phone,
                         code: code,
                         password: password,
-                        username: username || null,
+                        username: username,
                         email: email || null
                     })
                 })

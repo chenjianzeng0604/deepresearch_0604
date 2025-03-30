@@ -35,7 +35,6 @@ class MySQLBase:
                 cursorclass=DictCursor,
                 autocommit=True
             )
-            logger.info("MySQL连接成功")
         except Exception as e:
             logger.error(f"MySQL连接失败: {str(e)}")
             raise

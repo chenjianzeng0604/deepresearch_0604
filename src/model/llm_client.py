@@ -6,6 +6,7 @@ import time
 import asyncio
 import openai
 from src.prompts.prompt_templates import PromptTemplates
+from src.config.app_config import app_config
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +15,15 @@ class LLMClient:
     LLM客户端，封装对LLM API的调用
     """
     
-    def __init__(self, api_key: str, api_base: str = "https://api.openai.com/v1",
-                model: str = "gpt-4-turbo-preview", temperature: float = 0.7,
-                max_tokens: int = 4096, use_tool_model: str = "gpt-4-turbo-preview"):
+    def __init__(self, api_key: str, api_base: str = None,
+                model: str = None, temperature: float = 0.7,
+                max_tokens: int = 4096, use_tool_model: str = None):
         self.api_key = api_key
         self.api_base = api_base
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.use_tool_model = use_tool_model
-        
-        # 初始化API客户端
         self._init_client()
     
     def _init_client(self):
@@ -283,4 +282,8 @@ class LLMClient:
                 yield non_streaming_response
             except Exception as e2:
                 logger.error(f"非流式生成文本时出错: {e2}", exc_info=True)
-                yield f"生成文本时出错: {str(e2)}"
+                yield f"生成文本时出错: {str(e2)}"  
+
+llm_client = LLMClient(api_key=app_config.llm.api_key, 
+                       model=app_config.llm.model, 
+                       api_base=app_config.llm.api_base)

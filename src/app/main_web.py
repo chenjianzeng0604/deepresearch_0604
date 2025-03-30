@@ -12,18 +12,13 @@ from typing import List, Optional, Dict
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends, HTTPException, Cookie, status
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBasic
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import markdown2
 import jwt
 from starlette.middleware.sessions import SessionMiddleware
-import random
-import string
 from datetime import datetime, timedelta
-import time
-import inspect
-import asyncio
 
 # 将项目根目录添加到Python路径
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -37,11 +32,11 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 from src.app.chat_bean import ChatMessage
 from src.agents.deepresearch_agent import DeepresearchAgent
 from src.tools.distribution.email_sender import EmailSender
-from src.admin.crawler_config_manager import CrawlerConfigManager
 from src.app.client_user_manager import client_auth_router, initialize_client_user_manager
 from src.database.mysql.schemas.chat_schema import CHAT_SCHEMA, init_chat_default_data
 from src.database.mysql.mysql_base import MySQLBase
 from src.utils.log_utils import setup_logging
+from src.admin.crawler_config_manager import crawler_config_manager
 
 # 加载环境变量
 load_dotenv()
@@ -54,17 +49,17 @@ from src.utils.file_utils import ensure_app_directories
 ensure_app_directories()
 
 # 创建FastAPI应用
-app = FastAPI(title="深度研究助手 - Web版")
+app = FastAPI(title="深度研究助手 - 对客版")
 
 # 添加会话中间件
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "deepresearch_default_secret_key")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 # 创建模板引擎
 templates = Jinja2Templates(directory="templates")
 
 # 创建数据库管理器实例
-db_manager = CrawlerConfigManager()
+db_manager = crawler_config_manager
 # 创建MySQL连接
 mysql_base = MySQLBase()
 mysql_connection = mysql_base.connection
@@ -106,17 +101,6 @@ active_streams = {}
 # 会话历史存储
 chat_history = {}  # 格式: {session_id: {"messages": [], "created_at": timestamp, "updated_at": timestamp, "title": "", "user_id": user_id}}
 
-# JWT工具函数
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
-    return encoded_jwt
-
 def get_current_user(request: Request):
     """
     从JWT令牌获取当前用户信息，用于模板渲染
@@ -156,57 +140,12 @@ def get_agent(session_id: str) -> DeepresearchAgent:
     
     return agent_instances[session_id]
 
-# 生成短信验证码
-def generate_verification_code():
-    """生成6位数字验证码"""
-    return ''.join(random.choices(string.digits, k=6))
-
 # 请求模型
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     platforms: List[str] = ["web_site", "github", "arxiv", "weibo", "weixin", "twitter"]
     email: Optional[str] = None
-
-# 用于保护接口的依赖函数
-async def get_current_user_from_token(request: Request):
-    """
-    从JWT令牌获取当前用户信息，用于API接口保护
-    
-    Args:
-        request: 请求对象
-    
-    Returns:
-        Dict: 用户信息，包含username和user_id
-    
-    Raises:
-        HTTPException: 当令牌无效或不存在时抛出401未授权异常
-    """
-    token = request.cookies.get("access_token")
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="未授权访问",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        username = payload.get("sub")
-        user_id = payload.get("user_id")
-        if username is None or user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="无效的凭证",
-                headers={"WWW-Authenticate": "Bearer"}
-            )
-        return {"username": username, "user_id": user_id}
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的凭证",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
 
 @app.get("/api/chat/history")
 async def get_chat_history(request: Request):
@@ -269,7 +208,6 @@ async def get_session_history(session_id: str, request: Request):
     if session_id not in chat_history:
         raise HTTPException(status_code=404, detail="会话不存在")
     
-    # 检查会话所有权
     session_data = chat_history[session_id]
     if session_data.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
@@ -295,7 +233,6 @@ async def delete_session_history(session_id: str, request: Request):
     if session_id not in chat_history:
         raise HTTPException(status_code=404, detail="会话不存在")
     
-    # 检查会话所有权
     session_data = chat_history[session_id]
     if session_data.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="无权删除此会话")
@@ -304,80 +241,6 @@ async def delete_session_history(session_id: str, request: Request):
     return {"success": True, "message": "会话已删除"}
 
 @app.get("/api/chat")
-async def chat_sse(request: Request):
-    """
-    SSE聊天接口 - GET请求版本，为了支持EventSource
-    """
-    stream_id = request.query_params.get("stream_id")
-    if not stream_id:
-        stream_id = str(uuid.uuid4())
-    
-    message = request.query_params.get("message")
-    if not message:
-        raise HTTPException(status_code=400, detail="必须提供message参数")
-    
-    session_id = request.query_params.get("session_id")
-    platforms_str = request.query_params.get("platforms", "web_site,github,arxiv,weibo,weixin,twitter")
-    platforms = platforms_str.split(",")
-    email = request.query_params.get("email")
-    
-    # 获取当前用户
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="请先登录",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    user_id = user["user_id"]
-    
-    # 创建新会话或获取现有会话
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    elif session_id not in chat_history:
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    else:
-        # 验证会话所有权
-        if chat_history[session_id].get("user_id") != user_id:
-            raise HTTPException(status_code=403, detail="无权访问此会话")
-    
-    # 保存用户消息到历史
-    chat_history[session_id]["messages"].append({
-        "role": "user",
-        "content": message,
-        "timestamp": datetime.datetime.now().isoformat()
-    })
-    
-    # 如果是首次消息，使用它作为会话标题
-    if len(chat_history[session_id]["messages"]) == 1:
-        # 截取前30个字符作为标题
-        title = message[:30] + ("..." if len(message) > 30 else "")
-        chat_history[session_id]["title"] = title
-    
-    # 更新会话最后修改时间
-    chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
-    
-    # 创建响应流
-    return StreamingResponse(
-        process_chat_request(stream_id, session_id, message, platforms, email),
-        media_type="text/event-stream"
-    )
-
-@app.get("/api/chat/stream")
 async def chat_stream(request: Request):
     """
     SSE聊天接口 - 流式响应，与chat_sse功能相同但路径不同
@@ -395,7 +258,6 @@ async def chat_stream(request: Request):
     platforms = platforms_str.split(",")
     email = request.query_params.get("email")
     
-    # 获取当前用户
     user = get_current_user(request)
     if not user:
         raise HTTPException(
@@ -425,27 +287,21 @@ async def chat_stream(request: Request):
             "user_id": user_id
         }
     else:
-        # 验证会话所有权
         if chat_history[session_id].get("user_id") != user_id:
             raise HTTPException(status_code=403, detail="无权访问此会话")
     
-    # 保存用户消息到历史
     chat_history[session_id]["messages"].append({
         "role": "user",
         "content": message,
         "timestamp": datetime.datetime.now().isoformat()
     })
     
-    # 如果是首次消息，使用它作为会话标题
     if len(chat_history[session_id]["messages"]) == 1:
-        # 截取前30个字符作为标题
         title = message[:30] + ("..." if len(message) > 30 else "")
         chat_history[session_id]["title"] = title
     
-    # 更新会话最后修改时间
     chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
     
-    # 创建响应流
     return StreamingResponse(
         process_chat_request(stream_id, session_id, message, platforms, email),
         media_type="text/event-stream"
@@ -646,7 +502,6 @@ async def chat(chat_request: ChatRequest, request: Request):
             })
             chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
         
-        # 发送邮件（如果需要）
         if email:
             await send_email_with_results(message, content, email, sources)
             response_data["email_sent"] = True
@@ -655,132 +510,6 @@ async def chat(chat_request: ChatRequest, request: Request):
     except Exception as e:
         logger.error(f"处理请求时出错: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket):
-    """
-    WebSocket聊天
-    
-    Args:
-        websocket: WebSocket连接
-    """
-    await websocket.accept()
-    
-    try:
-        # 获取初始连接参数
-        connection_data = await websocket.receive_json()
-        session_id = connection_data.get("session_id", "")
-        
-        await websocket.send_json({
-            "type": "system",
-            "content": "WebSocket连接已建立"
-        })
-        
-        agent = get_agent(session_id)
-        
-        # 循环处理消息
-        while True:
-            data = await websocket.receive_json()
-            message = data.get("message", "")
-            request_id = data.get("request_id", str(uuid.uuid4()))
-            
-            if not message:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "消息不能为空",
-                    "request_id": request_id
-                })
-                continue
-            
-            # 发送初始状态更新
-            await websocket.send_json({
-                "type": "status",
-                "content": "开始处理您的请求...",
-                "phase": "init",
-                "request_id": request_id
-            })
-            
-            full_response = ""
-            found_sources = []
-            current_phase = "init"
-            
-            try:
-                # 流式处理响应
-                async for chunk in agent.process_stream(ChatMessage(message=message)):
-                    # 检查流是否已被客户端中止
-                    if not active_streams.get(stream_id, {}).get("active", False):
-                        logger.info(f"流已被客户端中止 [stream_id={stream_id}]")
-                        break
-                    
-                    # 处理不同类型的chunk
-                    if isinstance(chunk, dict):
-                        chunk_type = chunk.get("type", "content")
-                        
-                        # 追踪完整响应
-                        if chunk_type == "content" and "content" in chunk:
-                            full_response += chunk["content"]
-                        
-                        # 更新当前阶段
-                        if chunk_type == "status" and "phase" in chunk:
-                            current_phase = chunk["phase"]
-                        
-                        # 收集源引用
-                        if chunk_type == "sources" and "content" in chunk and isinstance(chunk["content"], list):
-                            found_sources = chunk["content"]
-                        
-                        # 添加请求ID并发送
-                        chunk["request_id"] = request_id
-                        await websocket.send_json(chunk)
-                    else:
-                        # 字符串直接作为内容发送
-                        content_chunk = {
-                            "type": "content",
-                            "content": chunk,
-                            "request_id": request_id
-                        }
-                        full_response += chunk
-                        await websocket.send_json(content_chunk)
-                
-                # 确保完成阶段被标记
-                if current_phase != "complete":
-                    await websocket.send_json({
-                        "type": "status",
-                        "content": "处理完成",
-                        "phase": "complete",
-                        "request_id": request_id
-                    })
-                
-                # 发送完成事件
-                await websocket.send_json({
-                    "type": "complete",
-                    "content": "处理完成",
-                    "request_id": request_id
-                })
-                
-                # 处理邮件发送
-                email = data.get("email")
-                if email:
-                    await send_email_with_results(message, full_response, email, found_sources)
-                    await websocket.send_json({
-                        "type": "status",
-                        "content": f"结果已发送至邮箱: {email}",
-                        "phase": "email_sent",
-                        "request_id": request_id
-                    })
-            
-            except Exception as e:
-                error_msg = f"处理请求时出错: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                await websocket.send_json({
-                    "type": "error",
-                    "content": error_msg,
-                    "request_id": request_id
-                })
-    
-    except WebSocketDisconnect:
-        logger.info("WebSocket连接断开")
-    except Exception as e:
-        logger.error(f"WebSocket错误: {str(e)}", exc_info=True)
 
 async def send_email_with_results(query: str, response: str, email: str = None, sources=None):
     """
@@ -891,7 +620,7 @@ async def login_page(request: Request):
 if __name__ == "__main__":
     import uvicorn
     
-    print("\n深度研究助手 - Web版\n")
+    print("\n深度研究助手 - 对客版\n")
     print("启动Web服务器...")
     print("访问 http://127.0.0.1:8000/ 开始使用")
     

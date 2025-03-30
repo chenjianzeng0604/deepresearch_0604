@@ -23,7 +23,7 @@ from src.admin.crawler_processor import CrawlerProcessor
 from src.config.app_config import AppConfig
 from src.tools.distribution.factory import create_distribution_manager
 from src.tools.crawler.scheduled_crawler import start_scheduler, stop_scheduler
-from src.tools.crawler.config import CrawlerConfig
+from src.tools.crawler.config import crawler_config
 
 # 加载环境变量
 load_dotenv()
@@ -154,7 +154,6 @@ async def start_crawler_cmd(args):
         if run_now:
             print("\n同时执行一次立即爬取")
         
-        crawler_config = CrawlerConfig()
         if not scenario:
             scenario = crawler_config.default_scenario
         

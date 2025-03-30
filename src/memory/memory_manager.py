@@ -8,7 +8,7 @@ import json
 from typing import Dict, List, Any, Optional, Union
 import redis
 from src.database.mysql.mysql_base import MySQLBase
-from src.session.session_manager import SessionManager
+from src.session.session_manager import session_manager
 from src.database.mysql.schemas.chat_schema import CHAT_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class MemoryManager(MySQLBase):
         """初始化MySQL和Redis连接"""
         super().__init__()
         self._init_memory_tables()
-        self.session_manager = SessionManager()
+        self.session_manager = session_manager
         
         # 初始化Redis连接
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -46,8 +46,6 @@ class MemoryManager(MySQLBase):
                     if table_name in ['memories', 'memory_tags', 'memory_references']:
                         cursor.execute(create_sql)
                         logger.debug(f"创建或确认表存在: {table_name}")
-                
-                logger.info("记忆相关表初始化成功")
         except Exception as e:
             logger.error(f"记忆相关表初始化失败: {str(e)}")
             raise
@@ -60,12 +58,10 @@ class MemoryManager(MySQLBase):
                 port=self.redis_port,
                 db=self.redis_db,
                 password=self.redis_password,
-                decode_responses=True  # 自动将字节解码为字符串
+                decode_responses=True
             )
-            logger.info("Redis连接成功")
         except Exception as e:
             logger.error(f"Redis连接失败: {str(e)}")
-            # 失败时不抛出异常，允许只使用MySQL功能
             self.redis_client = None
     
     # 长期记忆管理 (MySQL)
@@ -318,3 +314,6 @@ class MemoryManager(MySQLBase):
         if self.redis_client:
             self.redis_client.close()
             logger.info("Redis连接已关闭")
+
+memory_manager = MemoryManager()
+

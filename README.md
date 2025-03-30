@@ -2,6 +2,25 @@
 
 一个结合规划能力、深度研究和联网搜索的智能分析系统，专注于任何领域的深度分析与内容挖掘。支持命令行和Web界面两种使用方式，可以实时获取多平台信息并生成专业分析报告。集成了定时爬取功能，可以自动追踪关键词的最新动态。
 
+## 目录
+
+- [功能特点](#功能特点)
+- [系统架构](#系统架构)
+- [环境要求](#环境要求)
+- [快速开始](#快速开始)
+- [使用指南](#使用指南)
+  - [命令行界面](#命令行界面)
+  - [Web界面](#web界面)
+  - [多平台爬虫](#多平台爬虫)
+  - [定时爬虫功能](#定时爬虫功能)
+  - [作为Python库使用](#作为python库使用)
+- [项目结构](#项目结构)
+- [开发指南](#开发指南)
+- [问题排查](#问题排查)
+- [贡献指南](#贡献指南)
+- [许可证](#许可证)
+- [联系方式](#联系方式)
+
 ## 功能特点
 
 - **智能规划**: 基于用户需求自动规划分析步骤和策略
@@ -12,23 +31,37 @@
 - **对话式交互**: 提供自然、连贯的对话体验，支持流式输出
 - **专业知识库**: 内置领域专业知识和分析框架
 - **可视化分析**: 生成直观的数据可视化报告
-- **多平台分发**: 支持将生成的报告分发到多个平台
+- **多平台分发**: 支持将生成的报告分发到多个平台（如邮件、微信公众号等）
 - **Web界面**: 提供友好的Web交互界面，支持WebSocket实时通信
 
-## 系统要求
+## 系统架构
+
+深度研究助手采用模块化设计，主要包含以下核心组件：
+
+- **智能体模块**: 基于大语言模型的智能代理，负责规划和执行研究任务
+- **爬虫模块**: 多平台内容获取系统，支持常规网站、GitHub、arXiv、微信等
+- **向量数据库**: 使用Milvus存储和检索文本嵌入，实现高效的语义搜索
+- **搜索模块**: 集成多种搜索引擎，获取实时信息
+- **分发模块**: 支持将生成的报告分发到邮件、微信公众号等平台
+- **Web服务**: 基于FastAPI的Web界面，提供用户友好的交互体验
+- **定时任务**: 基于APScheduler的定时爬虫系统，自动追踪关键词动态
+
+## 环境要求
 
 - Python 3.8+
 - 足够的网络带宽以支持实时搜索和内容爬取
-- OpenAI API密钥（或兼容的API服务）
+- OpenAI API密钥（或兼容的API服务，如阿里云通义千问）
 - Milvus向量数据库（用于知识库存储和检索）
+- Docker（用于运行Milvus）
+- 可选：MySQL数据库（用于存储用户和任务信息）
 
 ## 快速开始
 
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/your-username/deepresearch.git
-cd deepresearch
+git clone https://github.com/chenjianzeng0604/deepresearch_0604.git
+cd deepresearch_0604
 ```
 
 ### 2. 安装依赖
@@ -97,16 +130,6 @@ OPENAI_API_KEY=your_openai_api_key  # 替换为您的OpenAI API密钥
 OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1  # 阿里云通义千问兼容模式
 # OPENAI_API_BASE=https://api.openai.com/v1  # OpenAI官方API
 
-# 服务器配置
-HOST=127.0.0.1  # Web服务监听地址
-PORT=8000       # Web服务端口
-DEBUG=true      # 是否启用调试模式
-
-# 应用信息
-APP_NAME=deepresearch_0604  # 应用名称
-APP_VERSION=0.1.0           # 应用版本
-LOG_LEVEL=INFO              # 日志级别
-
 # LLM模型配置
 LLM_MODEL=deepseek-r1                # 使用的模型名称
 LLM_TEMPERATURE=0.7                  # 模型温度参数
@@ -114,38 +137,10 @@ LLM_MAX_TOKENS=4096                  # 最大输出token数
 LLM_USE_TOOL_MODEL=qwen2.5-72b-instruct  # 工具调用模型
 
 # Milvus向量数据库配置
-MILVUS_HOST=127.0.0.1       # Milvus服务器地址
-MILVUS_PORT=19530           # Milvus服务器端口
-COLLECTION_NAME=deepresearch # Milvus集合名称
-
-# 搜索引擎配置
-WEB_SEARCH_ENABLED=true    # 是否启用网络搜索
-SEARCH_ENGINE=google       # 搜索引擎（google, bing, duckduckgo等）
-SEARCH_API_KEY=your_search_api_key  # 搜索API密钥（如使用Google或Bing需要）
-
-# 文件上传配置
-MAX_UPLOAD_SIZE=104857600  # 最大上传文件大小（字节）
-SUPPORTED_EXTENSIONS=.pdf,.docx,.txt,.md,.csv  # 支持的文件类型
-
-# 微信公众号配置（可选）
-WECHAT_OA_ENABLED=false    # 是否启用微信公众号分发
-WECHAT_API_URL=https://api.weixin.qq.com  # 微信API URL
-WECHAT_OA_APP_ID=your_wechat_app_id      # 微信公众号AppID
-WECHAT_OA_APP_SECRET=your_wechat_app_secret  # 微信公众号AppSecret
-
-# 快代理配置（用于爬虫IP代理）
-KDL_PROXIES_SERVER=your_kdl_server        # 快代理服务器地址
-KDL_PROXIES_USERNAME=your_kdl_username    # 快代理用户名
-KDL_PROXIES_PASSWORD=your_kdl_password    # 快代理密码
-
-# 爬虫配置
-CRAWLER_MAX_LINKS_RESULT=10       # 每次爬取的最大链接数
-CRAWLER_EXTRACT_PDF_TIMEOUT=30     # PDF提取超时时间（秒）
-CRAWLER_FETCH_URL_TIMEOUT=60       # URL获取超时时间（秒）
-
-# Cloudflare绕过配置
-CLOUDFLARE_BYPASS_POST_SUBMIT_WAIT=30000    # 提交后等待时间（毫秒）
-CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT=10000    # 等待超时时间（毫秒）
+MILVUS_URI=http://localhost:19530    # Milvus服务器地址
+MILVUS_USER=your_milvus_user         # Milvus用户名（可选）
+MILVUS_PASSWORD=your_milvus_password # Milvus密码（可选）
+MILVUS_DB_NAME=your_milvus_db_name   # Milvus数据库名称
 ```
 
 **重要提示**：
@@ -162,7 +157,6 @@ CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT=10000    # 等待超时时间（毫秒）
 ```bash
 mkdir -p data/logs
 mkdir -p data/reports/images
-mkdir -p data/knowledge_base
 ```
 
 ## 使用指南
@@ -173,25 +167,22 @@ mkdir -p data/knowledge_base
 
 ```bash
 # 生成一份关于特定话题的深度分析报告
-python -m src.main_cli generate --topic "人工智能在医疗领域的应用"
+python -m src.admin.crawler_cli generate --topic "人工智能在医疗领域的应用"
 
 # 查看已生成的报告列表
-python -m src.main_cli list
+python -m src.admin.crawler_cli list
 
 # 按报告类型过滤列表
-python -m src.main_cli list --type "technical" --limit 20
+python -m src.admin.crawler_cli list --type "technical" --limit 20
 
 # 分发报告到配置的平台
-python -m src.main_cli distribute --id <报告ID> --platforms wechat
+python -m src.admin.crawler_cli distribute --id <报告ID> --platforms wechat,email
 
-# 启动定时爬虫任务（每天凌晨2点和下午2点自动执行）
-python -m src.main_cli scheduler-start --keywords "人工智能" "大模型" "AIGC" --platforms web_site github arxiv weixin search
+# 启动定时爬虫任务
+python -m src.tools.crawler.scheduled_crawler --keywords "人工智能" "大模型" "AIGC" --platforms web_site github arxiv weixin search
 
 # 启动定时爬虫任务并立即执行一次
-python -m src.main_cli scheduler-start --keywords "人工智能" "大模型" --run-now
-
-# 停止定时爬虫任务
-python -m src.main_cli scheduler-stop
+python -m src.tools.crawler.scheduled_crawler --keywords "人工智能" "大模型" --run-now
 ```
 
 ### Web界面
@@ -199,7 +190,7 @@ python -m src.main_cli scheduler-stop
 项目提供了基于FastAPI的Web界面，可以通过以下方式启动：
 
 ```bash
-python -m src.main_web
+python -m src.app.main_web
 ```
 
 启动后，访问 http://127.0.0.1:8000/ 即可使用Web界面。Web界面支持：
@@ -211,12 +202,14 @@ python -m src.main_web
 - 报告生成与管理
 - 文件上传与处理
 
-### 各平台爬虫使用方法
+### 多平台爬虫
 
 在使用时，您可以指定需要爬取的平台：
 
 ```python
 # 在Python代码中指定平台
+from src.app.chat_bean import ChatMessage
+
 message = ChatMessage(
     session_id="test_session",
     message="查询内容",
@@ -237,28 +230,25 @@ message = ChatMessage(
 在命令行中：
 
 ```bash
-python -m src.main_cli generate --topic "人工智能在医疗领域的应用" --platforms web_site,search,github,arxiv
+python -m src.admin.crawler_cli generate --topic "人工智能在医疗领域的应用" --platforms web_site,search,github,arxiv
 ```
 
 ### 定时爬虫功能
 
-定时爬虫功能允许您设置关键词和平台，系统会在每天凌晨2点和下午2点自动执行爬取任务，并将内容存入知识库。
+定时爬虫功能允许您设置关键词和平台，系统会按计划自动执行爬取任务，并将内容存入知识库。
 
 ```bash
 # 启动定时爬虫（默认平台包括网站、GitHub、arXiv、微信和搜索引擎）
-python -m src.main_cli scheduler-start --keywords "人工智能" "大模型" "AIGC"
+python -m src.tools.crawler.scheduled_crawler --keywords "人工智能" "大模型" "AIGC"
 
 # 指定特定平台
-python -m src.main_cli scheduler-start --keywords "人工智能" "大模型" --platforms github arxiv
+python -m src.tools.crawler.scheduled_crawler --keywords "人工智能" "大模型" --platforms github arxiv
 
 # 立即执行一次爬取并继续定时执行
-python -m src.main_cli scheduler-start --keywords "人工智能" "大模型" --run-now
-
-# 停止定时爬虫
-python -m src.main_cli scheduler-stop
+python -m src.tools.crawler.scheduled_crawler --keywords "人工智能" "大模型" --run-now
 ```
 
-定时爬虫启动后会在后台运行，可以使用Ctrl+C或scheduler-stop命令停止。定时任务会在凌晨2点和下午2点各执行一次，无需手动干预。
+定时爬虫启动后会在后台运行，可以使用Ctrl+C停止。定时任务会按照配置的时间执行，无需手动干预。
 
 ### 作为Python库使用
 
@@ -267,8 +257,8 @@ python -m src.main_cli scheduler-stop
 ```python
 import asyncio
 from src.agents.deepresearch_agent import DeepresearchAgent
-from src.models.config import AppConfig
-from src.models.response import ChatMessage
+from src.config.app_config import AppConfig
+from src.app.chat_bean import ChatMessage
 
 # 创建配置
 config = AppConfig.from_env()  # 从环境变量加载配置
@@ -276,7 +266,7 @@ config = AppConfig.from_env()  # 从环境变量加载配置
 config = AppConfig(
     llm={
         "api_key": "your_openai_api_key",
-        "model": "gpt-4-turbo",
+        "model": "deepseek-r1",
         "temperature": 0.2
     },
     search={
@@ -306,35 +296,6 @@ async def run_query():
 asyncio.run(run_query())
 ```
 
-### 使用定时爬虫API
-
-您也可以在自己的代码中使用定时爬虫功能：
-
-```python
-import asyncio
-from src.scheduled_crawler import start_scheduler, stop_scheduler
-
-async def main():
-    # 启动定时爬虫
-    keywords = ["人工智能", "大模型", "AIGC"]
-    platforms = ["web_site", "github", "arxiv", "weixin", "search"]
-    run_now = True  # 是否立即执行一次
-    
-    scheduler = await start_scheduler(keywords, platforms, run_now)
-    
-    # 保持程序运行一段时间
-    try:
-        print("定时任务已启动，按Ctrl+C停止")
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        await stop_scheduler()
-        print("已停止定时任务")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
 ## 项目结构
 
 ```
@@ -342,21 +303,38 @@ if __name__ == "__main__":
 │   ├── logs/              # 日志文件
 │   ├── reports/           # 生成的报告
 │   │   └── images/        # 报告图片
-│   └── knowledge_base/    # 知识库数据
 ├── src/                   # 源代码
+│   ├── admin/             # 管理模块
+│   │   ├── admin_web.py   # 管理员Web界面
+│   │   ├── crawler_cli.py # 爬虫命令行工具
+│   │   └── crawler_config_manager.py # 爬虫配置管理
 │   ├── agents/            # 智能体模块
 │   │   └── deepresearch_agent.py  # 深度研究智能体
-│   ├── core/              # 核心处理逻辑
-│   ├── crawler/           # 网页爬虫模块
-│   ├── distribution/      # 内容分发模块
-│   ├── models/            # 数据模型
-│   ├── search/            # 联网搜索模块
-│   ├── utils/             # 工具函数
-│   ├── vectordb/          # 向量数据库接口
-│   ├── scheduled_crawler.py # 定时爬虫模块
-│   ├── main_cli.py        # 命令行界面
-│   └── main_web.py        # Web界面
+│   ├── app/               # 应用模块
+│   │   ├── chat_bean.py   # 聊天消息模型
+│   │   └── main_web.py    # Web界面主程序
+│   ├── config/            # 配置模块
+│   │   └── app_config.py  # 应用配置
+│   ├── database/          # 数据库模块
+│   │   ├── mysql/         # MySQL数据库
+│   │   ├── redis/         # Redis缓存
+│   │   └── vectordb/      # 向量数据库
+│   ├── log/               # 日志模块
+│   ├── memory/            # 内存管理
+│   ├── model/             # 模型模块
+│   │   ├── embeddings/    # 嵌入模型
+│   │   └── llm_client.py  # LLM客户端
+│   ├── prompts/           # 提示词模板
+│   ├── session/           # 会话管理
+│   ├── token/             # Token计数
+│   ├── tools/             # 工具模块
+│   │   ├── crawler/       # 爬虫工具
+│   │   ├── distribution/  # 分发工具
+│   │   └── search/        # 搜索工具
+│   └── utils/             # 工具函数
 ├── templates/             # Web模板文件
+│   ├── admin/             # 管理员界面模板
+│   └── app/               # 应用界面模板
 ├── .env                   # 环境变量配置
 ├── .env_example           # 环境变量配置示例
 └── requirements.txt       # 项目依赖
@@ -370,10 +348,10 @@ if __name__ == "__main__":
 
 #### 1. 添加新的爬虫
 
-在`src/crawler`目录下创建新的爬虫类，继承基础爬虫类并实现必要的方法：
+在`src/tools/crawler`目录下创建新的爬虫类，继承基础爬虫类并实现必要的方法：
 
 ```python
-from src.crawler.base_crawler import BaseCrawler
+from src.tools.crawler.web_crawlers import BaseCrawler
 
 class CustomCrawler(BaseCrawler):
     async def parse_sub_url(self, query: str) -> list:
@@ -385,20 +363,18 @@ class CustomCrawler(BaseCrawler):
         pass
 ```
 
-然后，在`src/crawler/crawler_manager.py`中注册新的爬虫：
-
-```python
-self.custom_crawler = CustomCrawler(self.config)
-```
+然后，在爬虫管理器中注册新的爬虫。
 
 #### 2. 自定义定时任务
 
-您可以修改`src/scheduled_crawler.py`文件来自定义定时任务的执行时间和行为：
+您可以修改`src/tools/crawler/scheduled_crawler.py`文件来自定义定时任务的执行时间和行为：
 
 ```python
 # 修改执行时间（例如每小时执行一次）
-self.scheduler.add_job(
-    self.scheduled_crawl,
+from apscheduler.triggers.cron import CronTrigger
+
+scheduler.add_job(
+    scheduled_crawl,
     CronTrigger(hour='*/1'),  # 每小时执行一次
     args=[keywords, platforms],
     id='crawl_task_hourly',
@@ -406,22 +382,14 @@ self.scheduler.add_job(
 )
 ```
 
-#### 3. 自定义报告生成
+#### 3. 添加新的分发平台
 
-修改`src/core/news_processor.py`文件来自定义报告生成逻辑：
-
-```python
-async def process_tech_news(self, topic: str, include_platforms: list = None):
-    # 自定义报告生成逻辑
-    pass
-```
-
-#### 4. 添加新的分发平台
-
-在`src/distribution`目录下创建新的分发平台类，并在`src/distribution/factory.py`中注册：
+在`src/tools/distribution`目录下创建新的分发平台类，并在工厂类中注册：
 
 ```python
 # 创建新的分发平台类
+from src.tools.distribution.base import BaseDistributor
+
 class CustomPlatformDistributor(BaseDistributor):
     async def distribute(self, report: dict) -> dict:
         # 实现分发逻辑
@@ -444,6 +412,7 @@ distributors["custom_platform"] = CustomPlatformDistributor(config)
    - 解决方案: 
      - 确认Milvus容器是否运行 `docker ps | grep milvus`
      - 检查Milvus连接参数是否正确
+     - 确保防火墙未阻止连接
 
 3. **爬虫错误**
    - 错误信息: "Failed to parse URL" 或 "Timeout"
@@ -451,10 +420,12 @@ distributors["custom_platform"] = CustomPlatformDistributor(config)
      - 增加超时时间 `CRAWLER_FETCH_URL_TIMEOUT=120`
      - 配置代理服务
      - 对于频繁访问被限制的网站，添加延迟
+     - 检查Cloudflare绕过配置
 
 4. **定时任务未执行**
    - 检查日志文件 `data/logs/app.log`
    - 确保程序保持运行状态
+   - 检查cron表达式是否正确
 
 ### 日志和调试
 

@@ -2,30 +2,38 @@
 对话系统客户端用户管理模块
 """
 import hashlib
-import random
-import string
 import logging
 from typing import Optional, Dict, List
-from datetime import datetime, timedelta
-import pymysql
+from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from pathlib import Path
+import sys
+
+# 将项目根目录添加到Python路径
+ROOT_DIR = Path(__file__).parent.parent.parent
+sys.path.append(str(ROOT_DIR))
+
+from src.utils.sms_service import sms_service
 
 logger = logging.getLogger(__name__)
 
 # 用户验证模型
 class UserLogin(BaseModel):
-    phone: str
-    code: str
+    phone: Optional[str] = None
+    code: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    login_type: str
 
 class UserRegister(BaseModel):
     phone: str
     code: str
     password: str
     email: Optional[str] = None
-    username: Optional[str] = None
+    username: str  # 改为必填项
     
 class PhoneVerification(BaseModel):
     phone: str
@@ -118,25 +126,25 @@ class ClientUserManager:
         except Exception as e:
             logger.error(f"根据用户名获取用户信息失败: {str(e)}")
             return None
-    
-    def authenticate_user(self, phone: str, password: str) -> Optional[Dict]:
+            
+    def verify_account(self, username: str, password: str) -> bool:
         """
-        验证用户登录
+        验证用户账号密码
         
         Args:
-            phone: 手机号
+            username: 用户名
             password: 密码（明文，会被自动哈希）
             
         Returns:
-            成功则返回用户信息，失败返回None
+            验证成功返回True，失败返回False
         """
         try:
             password_hash = hashlib.md5(password.encode()).hexdigest()
             
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, phone, username FROM client_users WHERE phone = %s AND password = %s AND is_active = TRUE",
-                    (phone, password_hash)
+                    "SELECT id FROM client_users WHERE username = %s AND password = %s AND is_active = TRUE",
+                    (username, password_hash)
                 )
                 user = cursor.fetchone()
                 
@@ -147,11 +155,11 @@ class ClientUserManager:
                         (user['id'],)
                     )
                     self.connection.commit()
-                
-                return user
+                    return True
+                return False
         except Exception as e:
-            logger.error(f"用户验证失败: {str(e)}")
-            return None
+            logger.error(f"验证用户账号密码失败: {str(e)}")
+            return False
     
     def register_user(self, phone: str, password: str, username: str = None, email: str = None) -> Optional[int]:
         """
@@ -364,105 +372,6 @@ class ClientUserManager:
         except Exception as e:
             logger.error(f"获取用户列表失败: {str(e)}")
             return []
-    
-    def generate_verification_code(self, phone: str, purpose: str) -> Optional[str]:
-        """
-        为手机号生成验证码
-        
-        Args:
-            phone: 手机号
-            purpose: 用途，可选值：'register', 'login', 'reset'
-            
-        Returns:
-            成功返回验证码，失败返回None
-        """
-        try:
-            # 生成6位数字验证码
-            code = ''.join(random.choices(string.digits, k=6))
-            
-            # 计算过期时间（15分钟后）
-            expires_at = datetime.now() + timedelta(minutes=15)
-            
-            with self.connection.cursor() as cursor:
-                # 先将该手机号之前的同用途未使用验证码标记为已使用
-                cursor.execute(
-                    """
-                    UPDATE verification_codes 
-                    SET is_used = TRUE 
-                    WHERE phone = %s AND purpose = %s AND is_used = FALSE
-                    """,
-                    (phone, purpose)
-                )
-                
-                # 插入新验证码
-                cursor.execute(
-                    """
-                    INSERT INTO verification_codes 
-                    (phone, code, purpose, expires_at) 
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (phone, code, purpose, expires_at)
-                )
-                self.connection.commit()
-                
-                return code
-        except Exception as e:
-            logger.error(f"生成验证码失败: {str(e)}")
-            self.connection.rollback()
-            return None
-    
-    def verify_code(self, phone: str, code: str, purpose: str) -> bool:
-        """
-        验证手机验证码
-        
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途，可选值：'register', 'login', 'reset'
-            
-        Returns:
-            验证成功返回True，失败返回False
-        """
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id FROM verification_codes 
-                    WHERE phone = %s AND code = %s AND purpose = %s AND is_used = FALSE AND expires_at > NOW()
-                    """,
-                    (phone, code, purpose)
-                )
-                
-                result = cursor.fetchone()
-                if not result:
-                    return False
-                    
-                # 标记验证码为已使用
-                cursor.execute(
-                    "UPDATE verification_codes SET is_used = TRUE WHERE id = %s",
-                    (result['id'],)
-                )
-                self.connection.commit()
-                
-                return True
-        except Exception as e:
-            logger.error(f"验证码验证失败: {str(e)}")
-            return False
-    
-    def send_sms_code(self, phone: str, code: str) -> bool:
-        """
-        发送短信验证码（模拟）
-        
-        Args:
-            phone: 手机号
-            code: 验证码
-            
-        Returns:
-            bool: 是否发送成功
-        """
-        # 实际环境中应对接SMS服务商API
-        logger.info(f"模拟发送短信验证码: {code} 到手机号: {phone}")
-        return True
         
     def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
         """
@@ -479,10 +388,10 @@ class ClientUserManager:
             raise ValueError("JWT SECRET_KEY not set")
             
         to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+        if expires_delta: 
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(days=15)
+            expire = datetime.now(timezone.utc) + timedelta(minutes=30)
         to_encode.update({"exp": expire})
         encoded_jwt = jwt.encode(to_encode, self.SECRET_KEY, algorithm="HS256")
         return encoded_jwt
@@ -516,7 +425,7 @@ def initialize_client_user_manager(connection, secret_key: str):
 
 # 路由处理函数
 @client_auth_router.post("/send_verification_code")
-async def send_verification_code(data: PhoneVerification, client_manager: ClientUserManager = Depends(get_client_user_manager)):
+async def send_verification_code(data: PhoneVerification):
     """
     发送客户端用户验证码
     
@@ -534,16 +443,7 @@ async def send_verification_code(data: PhoneVerification, client_manager: Client
                 content={"success": False, "message": "无效的验证码用途"}
             )
             
-        # 生成并保存验证码
-        code = client_manager.generate_verification_code(data.phone, data.purpose)
-        if not code:
-            return JSONResponse(
-                status_code=500,
-                content={"success": False, "message": "生成验证码失败"}
-            )
-            
-        # 发送验证码
-        if client_manager.send_sms_code(data.phone, code):
+        if sms_service.send_sms(data.phone):
             return JSONResponse(
                 content={"success": True, "message": "验证码已发送"}
             )
@@ -572,26 +472,39 @@ async def login(user_data: UserLogin, client_manager: ClientUserManager = Depend
         JSONResponse: 登录结果
     """
     try:
-        # 验证手机验证码
-        if not client_manager.verify_code(user_data.phone, user_data.code, "login"):
-            return JSONResponse(
-                status_code=400,
-                content={"success": False, "message": "验证码无效或已过期"}
-            )
-            
-        # 获取用户信息
-        user = client_manager.get_user_by_phone(user_data.phone)
-        if not user:
-            return JSONResponse(
-                status_code=404,
-                content={"success": False, "message": "用户不存在"}
-            )
-            
+        if user_data.login_type == 'account':
+            # 验证用户名+密码
+            if not client_manager.verify_account(user_data.username, user_data.password):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "message": "账号或密码错误"}
+                )
+            # 获取用户信息
+            user = client_manager.get_user_by_username(user_data.username)
+            if not user:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": "用户不存在"}
+                )
+        else:
+            # 验证手机验证码
+            if not sms_service.verify_code(user_data.phone, user_data.code):
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "message": "验证码无效或已过期"}
+                )
+            # 获取用户信息
+            user = client_manager.get_user_by_phone(user_data.phone)
+            if not user:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": "用户不存在"}
+                )
+        
         # 生成JWT令牌
         access_token = client_manager.create_access_token(
             data={"sub": user["username"] or user["phone"], "user_id": user["id"]}
         )
-        
         # 设置cookie
         response = JSONResponse(content={"success": True, "message": "登录成功"})
         response.set_cookie(
@@ -601,7 +514,6 @@ async def login(user_data: UserLogin, client_manager: ClientUserManager = Depend
             max_age=60 * 60 * 24 * 15,  # 15天
             samesite="lax"
         )
-        
         return response
     except Exception as e:
         logger.error(f"登录失败: {str(e)}")
@@ -624,7 +536,7 @@ async def register(user_data: UserRegister, client_manager: ClientUserManager = 
     """
     try:
         # 验证手机验证码
-        if not client_manager.verify_code(user_data.phone, user_data.code, "register"):
+        if not sms_service.verify_code(user_data.phone, user_data.code):
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": "验证码无效或已过期"}
@@ -687,7 +599,7 @@ async def reset_password(data: PasswordReset, client_manager: ClientUserManager 
     """
     try:
         # 验证手机验证码
-        if not client_manager.verify_code(data.phone, data.code, "reset"):
+        if not sms_service.verify_code(data.phone, data.code):
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": "验证码无效或已过期"}
@@ -705,6 +617,70 @@ async def reset_password(data: PasswordReset, client_manager: ClientUserManager 
             )
     except Exception as e:
         logger.error(f"密码重置失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": f"服务器错误: {str(e)}"}
+        )
+
+@client_auth_router.get("/user/me")
+async def get_current_user_info(request: Request, client_manager: ClientUserManager = Depends(get_client_user_manager)):
+    """
+    获取当前登录用户信息
+    
+    Args:
+        request: 请求对象
+        client_manager: 客户端用户管理器
+        
+    Returns:
+        JSONResponse: 用户信息
+    """
+    try:
+        # 从cookie中获取token
+        token = request.cookies.get("access_token")
+        if not token:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "未登录"}
+            )
+        
+        # 验证token
+        try:
+            payload = jwt.decode(token, client_manager.SECRET_KEY, algorithms=["HS256"])
+            username = payload.get("sub")
+            user_id = payload.get("user_id")
+            
+            if not username or not user_id:
+                return JSONResponse(
+                    status_code=401,
+                    content={"success": False, "message": "无效的令牌"}
+                )
+                
+            # 获取用户信息
+            user = client_manager.get_user_by_id(user_id)
+            if not user:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": "用户不存在"}
+                )
+                
+            # 返回用户基本信息
+            return JSONResponse(content={
+                "success": True,
+                "username": user["username"],
+                "user_id": user["id"],
+                "phone": user["phone"],
+                "email": user.get("email")
+            })
+            
+        except jwt.PyJWTError as e:
+            logger.error(f"验证令牌失败: {str(e)}")
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": "无效的令牌"}
+            )
+            
+    except Exception as e:
+        logger.error(f"获取当前用户信息失败: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "message": f"服务器错误: {str(e)}"}

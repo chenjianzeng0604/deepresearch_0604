@@ -34,7 +34,6 @@ class CrawlerConfigManager(MySQLBase):
             with self.connection.cursor() as cursor:
                 for table_name, create_table_sql in CRAWLER_SCHEMA.items():
                     cursor.execute(create_table_sql)
-                logger.info("爬虫配置数据表初始化成功")
         except Exception as e:
             logger.error(f"爬虫配置数据表初始化失败: {str(e)}")
             raise
@@ -126,10 +125,10 @@ class CrawlerConfigManager(MySQLBase):
                     cursor.execute(
                         """
                         INSERT INTO crawler_admin_users 
-                        (username, password, email, is_active) 
-                        VALUES (%s, %s, %s, %s)
+                        (username, password, phone, email, is_active) 
+                        VALUES (%s, %s, %s, %s, %s)
                         """,
-                        (default_username, hashed_password, "admin@example.com", True)
+                        (default_username, hashed_password, "13800138000", "admin@example.com", True)
                     )
                     self.connection.commit()
                     logger.info(f"已创建默认管理员账户: {default_username}")
@@ -1650,100 +1649,6 @@ class CrawlerConfigManager(MySQLBase):
             logger.error(f"根据手机号获取用户失败: {str(e)}")
             return None
     
-    def save_verification_code(self, phone: str, code: str, purpose: str, expires_at: datetime):
-        """保存验证码
-
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途，例如 'register', 'login', 'reset'
-            expires_at: 过期时间
-
-        Returns:
-            bool: 是否成功
-        """
-        try:
-            with self.connection.cursor() as cursor:
-                # 首先将该手机号之前的同用途验证码标记为已使用
-                cursor.execute(
-                    """
-                    UPDATE verification_codes 
-                    SET is_used = TRUE 
-                    WHERE phone = %s AND purpose = %s AND is_used = FALSE
-                    """,
-                    (phone, purpose)
-                )
-                
-                # 插入新的验证码
-                cursor.execute(
-                    """
-                    INSERT INTO verification_codes 
-                    (phone, code, purpose, expires_at)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (phone, code, purpose, expires_at)
-                )
-                self.connection.commit()
-                return True
-        except Exception as e:
-            logger.error(f"保存验证码失败: {str(e)}")
-            self.connection.rollback()
-            return False
-    
-    def verify_code(self, phone: str, code: str, purpose: str) -> bool:
-        """验证验证码
-
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途
-
-        Returns:
-            bool: 是否有效
-        """
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT * FROM verification_codes 
-                    WHERE phone = %s AND code = %s AND purpose = %s AND is_used = FALSE AND expires_at > NOW()
-                    """,
-                    (phone, code, purpose)
-                )
-                verification = cursor.fetchone()
-                return verification is not None
-        except Exception as e:
-            logger.error(f"验证码验证失败: {str(e)}")
-            return False
-    
-    def mark_code_as_used(self, phone: str, code: str, purpose: str) -> bool:
-        """将验证码标记为已使用
-
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途
-
-        Returns:
-            bool: 是否成功
-        """
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE verification_codes 
-                    SET is_used = TRUE 
-                    WHERE phone = %s AND code = %s AND purpose = %s AND is_used = FALSE
-                    """,
-                    (phone, code, purpose)
-                )
-                self.connection.commit()
-                return True
-        except Exception as e:
-            logger.error(f"标记验证码为已使用失败: {str(e)}")
-            self.connection.rollback()
-            return False
-    
     def create_admin_user_with_phone(self, phone: str, password: str, email: Optional[str] = None, username: Optional[str] = None) -> Optional[int]:
         """创建管理员用户
 
@@ -2085,104 +1990,7 @@ class CrawlerConfigManager(MySQLBase):
             self.connection.rollback()
             return False
             
-    # ====================== 验证码相关方法 ======================
-    
-    def generate_verification_code(self):
-        """
-        生成6位数字验证码
-        
-        Returns:
-            str: 6位数字验证码
-        """
-        import random
-        return ''.join([str(random.randint(0, 9)) for _ in range(6)])
-    
-    def save_verification_code(self, phone, code, purpose, expires_minutes=15):
-        """
-        保存验证码到数据库
-        
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途
-            expires_minutes: 过期时间（分钟）
-            
-        Returns:
-            bool: 是否保存成功
-        """
-        try:
-            from datetime import datetime, timedelta
-            expires_at = datetime.now() + timedelta(minutes=expires_minutes)
-            
-            with self.connection.cursor() as cursor:
-                # 标记该手机号之前的同用途验证码为已使用
-                cursor.execute(
-                    """
-                    UPDATE verification_codes 
-                    SET is_used = TRUE 
-                    WHERE phone = %s AND purpose = %s AND is_used = FALSE
-                    """,
-                    (phone, purpose)
-                )
-                
-                # 插入新验证码
-                cursor.execute(
-                    """
-                    INSERT INTO verification_codes 
-                    (phone, code, purpose, expires_at) 
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (phone, code, purpose, expires_at)
-                )
-                self.connection.commit()
-                
-                return True
-        except Exception as e:
-            logger.error(f"保存验证码失败: {str(e)}")
-            self.connection.rollback()
-            return False
-    
-    def verify_code(self, phone, code, purpose):
-        """
-        验证码验证
-        
-        Args:
-            phone: 手机号
-            code: 验证码
-            purpose: 用途
-            
-        Returns:
-            bool: 验证是否成功
-        """
-        try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id FROM verification_codes 
-                    WHERE phone = %s AND code = %s AND purpose = %s 
-                    AND is_used = FALSE AND expires_at > NOW()
-                    """,
-                    (phone, code, purpose)
-                )
-                
-                result = cursor.fetchone()
-                if not result:
-                    return False
-                
-                # 标记验证码为已使用
-                cursor.execute(
-                    "UPDATE verification_codes SET is_used = TRUE WHERE id = %s",
-                    (result['id'],)
-                )
-                self.connection.commit()
-                
-                return True
-        except Exception as e:
-            logger.error(f"验证码验证失败: {str(e)}")
-            return False
-            
     # ====================== 用户管理相关方法 ======================
-    
     def get_all_users(self):
         """
         获取所有注册用户
@@ -2349,3 +2157,5 @@ class CrawlerConfigManager(MySQLBase):
             logger.error(f"创建用户失败: {str(e)}")
             self.connection.rollback()
             return None
+
+crawler_config_manager = CrawlerConfigManager()

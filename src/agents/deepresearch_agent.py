@@ -19,15 +19,15 @@ import sys
 ROOT_DIR = Path(__file__).parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
-from src.model.llm_client import LLMClient
-from src.app.chat_bean import AppConfig
+from src.model.llm_client import llm_client
 from src.tools.crawler.web_crawlers import CrawlerManager
-from src.session.session_manager import SessionManager
+from src.session.session_manager import session_manager
 from src.session.message_manager import MessageManager
-from src.memory.memory_manager import MemoryManager
-from src.database.vectordb.milvus_dao import MilvusDao
+from src.memory.memory_manager import memory_manager
+from src.database.vectordb.milvus_dao import milvus_dao
 from src.token.token_counter import TokenCounter
-from src.tools.crawler.config import CrawlerConfig
+from src.tools.crawler.config import crawler_config
+from src.config.app_config import app_config
 from src.tools.crawler.scheduled_crawler import ScheduledCrawler
 from src.app.chat_bean import ChatMessage
 from src.tools.crawler.web_crawlers import WebCrawler
@@ -35,6 +35,7 @@ from src.app.chat_bean import ChatResponse
 from src.utils.json_parser import str2Json
 from src.prompts.prompt_templates import PromptTemplates
 from urllib.parse import quote
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -51,31 +52,21 @@ class DeepresearchAgent:
             session_id: 会话ID
         """
         session_id = session_id or str(uuid.uuid4())
-        self.config = AppConfig.from_env()
-        self.crawler_config = CrawlerConfig()
+        self.crawler_config = crawler_config
         self.session_id = session_id
         self.summary_limit = int(os.getenv("SUMMARY_LIMIT"))
         self.vectordb_limit = int(os.getenv("VECTORDB_LIMIT"))
         self.generate_query_num = int(os.getenv("GENERATE_QUERY_NUM"))
-        self.milvus_dao = MilvusDao(
-            uri=os.getenv("MILVUS_URI", "http://localhost:19530"),
-            user=os.getenv("MILVUS_USER", ""),
-            password=os.getenv("MILVUS_PASSWORD", ""),
-            db_name=os.getenv("MILVUS_DB_NAME", "default"),
-            reconnect_attempts=int(os.getenv("MILVUS_RECONNECT_ATTEMPTS", "3")),
-            reconnect_delay=int(os.getenv("MILVUS_RECONNECT_DELAY", "2"))
-        )
-        self.llm_client = LLMClient(api_key=self.config.llm.api_key, 
-                                        model=self.config.llm.model, 
-                                        api_base=self.config.llm.api_base)
+        self.milvus_dao = milvus_dao
+        self.llm_client = llm_client
         self.crawler_manager = CrawlerManager()
         self.research_max_iterations = int(os.getenv("RESEARCH_MAX_ITERATIONS"))
         
         # 初始化数据库管理器
         try:
-            self.session_manager = SessionManager()
+            self.session_manager = session_manager
             self.message_manager = MessageManager()
-            self.memory_manager = MemoryManager()
+            self.memory_manager = memory_manager
             # 确保会话存在
             if not self.session_manager.get_session(self.session_id):
                 self.session_manager.create_session(self.session_id)
@@ -87,7 +78,7 @@ class DeepresearchAgent:
             self.memory_manager = None
         
         # 初始化Token计数器
-        self.token_counter = TokenCounter(model_name=self.config.llm.model)
+        self.token_counter = TokenCounter(model_name=app_config.llm.model)
         
         # 记忆管理相关配置
         self.memory_threshold = int(os.getenv("MEMORY_THRESHOLD", "50"))  # 多少轮对话后生成长期记忆

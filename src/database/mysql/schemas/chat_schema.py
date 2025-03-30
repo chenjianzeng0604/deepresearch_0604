@@ -56,20 +56,6 @@ CHAT_SCHEMA = {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
-    """,
-    
-    # 客户端用户验证码表
-    "verification_codes": """
-        CREATE TABLE IF NOT EXISTS verification_codes (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            phone VARCHAR(20) NOT NULL,
-            code VARCHAR(10) NOT NULL,
-            purpose ENUM('register', 'login', 'reset') NOT NULL,
-            is_used BOOLEAN DEFAULT FALSE,
-            expires_at TIMESTAMP NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE KEY unique_active_code (phone, purpose, is_used)
-        )
     """
 }
 

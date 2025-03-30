@@ -2,7 +2,7 @@
 爬虫模块配置
 """
 import logging
-from src.admin.crawler_config_manager import CrawlerConfigManager
+from src.admin.crawler_config_manager import crawler_config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ class CrawlerConfig:
         """爬虫配置"""
         # 初始化数据库配置管理器
         try:
-            self.db_manager = CrawlerConfigManager()
+            self.db_manager = crawler_config_manager
             logger.info("爬虫配置管理器初始化成功")
         except Exception as e:
             logger.error(f"爬虫配置管理器初始化失败: {str(e)}")
@@ -189,3 +189,5 @@ class CrawlerConfig:
             except Exception as e:
                 logger.error(f"获取可用平台列表失败: {str(e)}")
         return []
+
+crawler_config = CrawlerConfig()

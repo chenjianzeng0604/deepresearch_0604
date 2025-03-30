@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 
 from src.agents.deepresearch_agent import DeepresearchAgent
-from src.models.config import AppConfig
-from src.models.response import ChatMessage, ChatResponse
+from src.config.app_config import AppConfig
+from src.app.chat_bean import ChatMessage
 import time
 
 logger = logging.getLogger(__name__)

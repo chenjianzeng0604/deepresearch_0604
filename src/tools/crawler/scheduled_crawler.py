@@ -5,16 +5,14 @@
 定时爬虫任务模块 - 提供每天凌晨2点和下午2点自动执行爬虫任务的功能
 """
 
+import uuid
 import os
 import asyncio
 import logging
-import sys
-import time
 from typing import List, Dict, Any
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-import signal
 import json
 
 from src.tools.crawler.web_crawlers import CrawlerManager
@@ -31,7 +29,6 @@ class ScheduledCrawler:
         """
         初始化定时爬虫任务管理器
         """
-        # Use lazy import when creating the agent instance
         from src.agents.deepresearch_agent import DeepresearchAgent
         self.agent = DeepresearchAgent()
         self.crawler_manager = CrawlerManager()
@@ -42,10 +39,9 @@ class ScheduledCrawler:
         self.current_tasks = set()
         self.logger = logger
         
-        # 初始化配置管理器
         try:
-            from src.admin.crawler_config_manager import CrawlerConfigManager
-            self.config_manager = CrawlerConfigManager()
+            from src.admin.crawler_config_manager import crawler_config_manager
+            self.config_manager = crawler_config_manager
             self.db_available = True
         except Exception as e:
             self.logger.warning(f"无法初始化配置管理器: {str(e)}")

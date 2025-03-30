@@ -21,7 +21,7 @@
         .sidebar-sticky {
             position: relative;
             top: 0;
-            height: calc(100vh - 48px);
+            height: calc(100vh - 48px - 60px); /* 减去用户信息区域的高度 */
             padding-top: .5rem;
             overflow-x: hidden;
             overflow-y: auto;
@@ -97,6 +97,91 @@
             gap: 0.5rem;
         }
         
+        /* 用户信息区域样式 */
+        .user-info-area {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            padding: 10px 15px;
+            background-color: #f0f0f0;
+            border-top: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        
+        .user-info-area:hover {
+            background-color: #e8e8e8;
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background-color: #007bff;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+        
+        .user-details {
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        .user-name {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            bottom: 60px;
+            left: 0;
+            width: 100%;
+            background-color: white;
+            border-radius: 4px 4px 0 0;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            display: none;
+            padding: 10px 0;
+        }
+        
+        .user-dropdown.active {
+            display: block;
+        }
+        
+        .dropdown-item {
+            padding: 8px 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .dropdown-item i {
+            width: 20px;
+            margin-right: 10px;
+            text-align: center;
+            color: #666;
+        }
+        
+        .dropdown-item.logout-item {
+            border-top: 1px solid #eee;
+            margin-top: 5px;
+            padding-top: 10px;
+            color: #dc3545;
+        }
+        
+        .dropdown-item.logout-item i {
+            color: #dc3545;
+        }
+        
         /* 确保按钮在移动端也能正常显示 */
         @media (max-width: 767.98px) {
             .d-flex.justify-content-between {
@@ -113,6 +198,31 @@
                 width: 100%;
                 text-align: center;
                 margin-bottom: 0.5rem;
+            }
+            
+            /* 移动端侧边栏样式调整 */
+            .sidebar {
+                padding-top: 0;
+            }
+            
+            .sidebar-sticky {
+                height: calc(100vh - 60px);
+            }
+            
+            .user-info-area {
+                position: relative;
+            }
+            
+            .user-dropdown {
+                position: fixed;
+                bottom: auto;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 90%;
+                max-width: 300px;
+                border-radius: 4px;
+                box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
             }
         }
     </style>
@@ -167,7 +277,7 @@
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link {% if active_page == 'users' %}active{% endif %}" href="{{ url_for('admin.users_list') }}">
+                            <a class="nav-link {% if active_page == 'users' %}active{% endif %}" href="{{ url_for('admin.users') }}">
                                 <i class="fas fa-users"></i> 用户管理
                             </a>
                         </li>

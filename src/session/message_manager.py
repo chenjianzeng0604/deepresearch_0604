@@ -6,7 +6,7 @@ import os
 import logging
 from typing import Dict, List, Optional
 from src.database.mysql.mysql_base import MySQLBase
-from src.session.session_manager import SessionManager
+from src.session.session_manager import session_manager
 from src.database.mysql.schemas.chat_schema import CHAT_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class MessageManager(MySQLBase):
         """初始化MySQL连接并确保消息相关表存在"""
         super().__init__()
         self._init_message_tables()
-        self.session_manager = SessionManager()
+        self.session_manager = session_manager
     
     def _init_message_tables(self):
         """初始化消息相关的数据表"""
@@ -29,8 +29,6 @@ class MessageManager(MySQLBase):
                     if table_name in ['messages', 'message_attachments']:
                         cursor.execute(create_sql)
                         logger.debug(f"创建或确认表存在: {table_name}")
-                
-                logger.info("消息相关表初始化成功")
         except Exception as e:
             logger.error(f"消息相关表初始化失败: {str(e)}")
             raise

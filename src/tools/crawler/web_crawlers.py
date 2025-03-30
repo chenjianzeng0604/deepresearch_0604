@@ -23,19 +23,17 @@ import requests
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 from aiohttp import ClientSession
-from src.database.vectordb.milvus_dao import MilvusDao
+from src.database.vectordb.milvus_dao import milvus_dao
 import uuid
 import json
 import pickle
 from src.prompts.prompt_templates import PromptTemplates
 from datetime import datetime
-from src.model.llm_client import LLMClient
+from src.model.llm_client import llm_client
 from playwright.async_api import async_playwright
 from src.tools.crawler.cloudflare_bypass import CloudflareBypass
 from src.database.vectordb.schema_manager import MilvusSchemaManager
-from src.app.chat_bean import AppConfig
-from src.tools.crawler.config import CrawlerConfig
-import re
+from src.tools.crawler.config import crawler_config
 from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM
 import torch
 
@@ -47,17 +45,8 @@ class WebCrawler:
     """
     
     def __init__(self):
-        self.config = AppConfig.from_env()
-        self.crawler_config = CrawlerConfig()
-        # 初始化通用MilvusDao客户端
-        self.milvus_dao = MilvusDao(
-            uri=os.getenv("MILVUS_URI", "http://localhost:19530"),
-            user=os.getenv("MILVUS_USER", ""),
-            password=os.getenv("MILVUS_PASSWORD", ""),
-            db_name=os.getenv("MILVUS_DB_NAME", "default"),
-            reconnect_attempts=int(os.getenv("MILVUS_RECONNECT_ATTEMPTS", "3")),
-            reconnect_delay=int(os.getenv("MILVUS_RECONNECT_DELAY", "2"))
-        )
+        self.crawler_config = crawler_config
+        self.milvus_dao = milvus_dao
         self.proxies = {
             "server": os.getenv("KDL_PROXIES_SERVER", ""),
             "username": os.getenv("KDL_PROXIES_USERNAME", ""),
@@ -74,9 +63,7 @@ class WebCrawler:
         self.crawler_fetch_article_with_semaphore = int(os.getenv("CRAWLER_FETCH_ARTICLE_WITH_SEMAPHORE", 10))
         self.crawler_fetch_url_max_retries = int(os.getenv("CRAWLER_FETCH_URL_MAX_RETRIES", 2))
         self.crawler_fetch_url_retry_delay = int(os.getenv("CRAWLER_FETCH_URL_RETRY_DELAY", 2))
-        self.llm_client = LLMClient(api_key=self.config.llm.api_key, 
-                                        model=self.config.llm.model, 
-                                        api_base=self.config.llm.api_base)
+        self.llm_client = llm_client
         self.article_trunc_word_count = int(os.getenv("ARTICLE_TRUNC_WORD_COUNT", 10000))
         
     def is_valid_url(self, url: str, base_domain: Optional[str] = None) -> bool:
@@ -1194,7 +1181,7 @@ class CrawlerManager:
     """
     
     def __init__(self):
-        self.config = CrawlerConfig()
+        self.config = crawler_config
         self.arxiv_crawler = ArxivCrawler()
         self.github_crawler = GithubCrawler()
         self.web_crawler = WebCrawler()
