@@ -273,16 +273,16 @@ async def chat_stream(request: Request):
         session_id = str(uuid.uuid4())
         chat_history[session_id] = {
             "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
             "title": "",
             "user_id": user_id
         }
     elif session_id not in chat_history:
         chat_history[session_id] = {
             "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
             "title": "",
             "user_id": user_id
         }
@@ -293,14 +293,14 @@ async def chat_stream(request: Request):
     chat_history[session_id]["messages"].append({
         "role": "user",
         "content": message,
-        "timestamp": datetime.datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat()
     })
     
     if len(chat_history[session_id]["messages"]) == 1:
         title = message[:30] + ("..." if len(message) > 30 else "")
         chat_history[session_id]["title"] = title
     
-    chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
+    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
     
     return StreamingResponse(
         process_chat_request(stream_id, session_id, message, platforms, email),
@@ -347,52 +347,89 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
     
     try:
         # 发送初始状态更新
-        event_type = "status"
-        yield f"event: {event_type}\ndata: {json.dumps({'content': '开始处理您的请求...', 'phase': 'init'})}\n\n"
-        
+        yield f"event: status\ndata: {json.dumps({'content': '开始处理您的请求...', 'phase': 'init'})}\n\n"
         # 处理流式响应
+        is_analysis_phase = False  # 标记是否进入深度分析阶段
+        
         async for chunk in agent.process_stream(ChatMessage(message=message, platforms=platforms)):
             # 检查流是否已被客户端中止
             if not active_streams.get(stream_id, {}).get("active", False):
                 logger.info(f"流已被客户端中止 [stream_id={stream_id}]")
                 break
-            
             # 处理不同类型的chunk
             if isinstance(chunk, dict):
                 chunk_type = chunk.get("type", "content")
-                
-                # 追踪完整响应
-                if chunk_type == "content" and "content" in chunk:
-                    full_response += chunk["content"]
-                
-                # 收集源引用
-                if chunk_type == "sources" and "content" in chunk and isinstance(chunk["content"], list):
-                    sources = chunk["content"]
-                
+                chunk_phase = chunk.get("phase", "")
+                if chunk_type == "status":
+                    if chunk_phase == "queries":
+                        query_list = chunk.get("query_list", [])
+                        if query_list:
+                            query_display = "📑 思考扩展查询:\n\n" + "\n\n".join([f"• {q}" for q in query_list])
+                            yield f"event: status\ndata: {json.dumps({'content': query_display, 'phase': 'queries_summary'})}\n\n"
+                    elif chunk_phase == "research":
+                        platform = chunk.get("platform", "")
+                        query = chunk.get("query", "")
+                        result_display = f"🌐 正在从{platform}联网搜索'{query}'..."
+                        yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
+                    elif chunk_phase == "research_detail":
+                        result = chunk.get("result", "")
+                        if result and result['url'] and result['content']:
+                            result_display = f"\n\n• {result['url']}\n\n{result['content'][:30]}"
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
+                    elif chunk_phase == "vector_search":
+                        scenario = chunk.get("scenario", "")
+                        result_display = f"🌐 正在从{scenario}知识库检索..."
+                        yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
+                    elif chunk_phase == "vector_search_detail":
+                        result = chunk.get("result", "")
+                        if result:
+                            result_display = f"\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['content'][:30]}" for item in result])
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
+                    elif chunk_phase == "analysis_deep":
+                        is_analysis_phase = True
+                        yield f"event: status\ndata: {json.dumps({'content': '🧠 最终答案', 'phase': 'analysis_deep'})}\n\n"
+                    else:
+                        # 其他状态信息正常传递
+                        yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
                 # 添加请求ID并发送
-                chunk["request_id"] = str(uuid.uuid4())
-                yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
+                if chunk_type == "content":
+                    # 内容消息需要标记其类型，便于前端识别思考过程和最终总结
+                    if not "type" in chunk:
+                        if is_analysis_phase:
+                            chunk["section_type"] = "thought_process"
+                        else:
+                            chunk["section_type"] = "final_answer"
+                    chunk["request_id"] = str(uuid.uuid4())
+                    yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
+                elif chunk_type not in ["status"]:  # 状态消息已经特殊处理过
+                    chunk["request_id"] = str(uuid.uuid4())
+                    yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
             else:
                 # 字符串直接作为内容发送
+                section_type = "thought_process" if is_analysis_phase else "final_answer"
                 content_chunk = {
                     "type": "content",
                     "content": chunk,
+                    "section_type": section_type,
                     "request_id": str(uuid.uuid4())
                 }
                 full_response += chunk
                 yield f"event: content\ndata: {json.dumps(content_chunk)}\n\n"
+        
+        # 在最后添加最终结论的结束标签
+        final_answer_end = "\n</div>\n"
+        yield f"event: content\ndata: {json.dumps({'content': final_answer_end, 'type': 'final_answer_end', 'request_id': str(uuid.uuid4())})}\n\n"
         
         # 保存助手回复到历史
         if full_response:
             chat_history[session_id]["messages"].append({
                 "role": "assistant",
                 "content": full_response,
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "sources": sources
             })
-            
             # 更新会话最后修改时间
-            chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
+            chat_history[session_id]["updated_at"] = datetime.now().isoformat()
             
         # 确保完成阶段被标记
         yield f"event: complete\ndata: {json.dumps({'content': '处理完成'})}\n\n"
@@ -401,10 +438,10 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
         if email:
             try:
                 await send_email_with_results(message, full_response, email, sources)
-                yield f"event: status\ndata: {json.dumps({'content': f'结果已发送至邮箱: {email}', 'phase': 'email_sent'})}\n\n"
+                yield f"event: status\ndata: {json.dumps({'content': f'📧 结果已发送至邮箱: {email}', 'phase': 'email_sent'})}\n\n"
             except Exception as e:
                 logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
-                yield f"event: status\ndata: {json.dumps({'content': f'发送邮件失败: {str(e)}', 'phase': 'email_error'})}\n\n"
+                yield f"event: status\ndata: {json.dumps({'content': f'❌ 发送邮件失败: {str(e)}', 'phase': 'email_error'})}\n\n"
     
     except Exception as e:
         error_msg = f"处理请求时出错: {str(e)}"
@@ -416,7 +453,6 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
         if stream_id in active_streams:
             active_streams[stream_id]["active"] = False
             logger.info(f"流处理完成 [stream_id={stream_id}]")
-
 
 @app.post("/api/chat")
 async def chat(chat_request: ChatRequest, request: Request):
@@ -450,16 +486,16 @@ async def chat(chat_request: ChatRequest, request: Request):
         session_id = str(uuid.uuid4())
         chat_history[session_id] = {
             "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
             "title": "",
             "user_id": user_id
         }
     elif session_id not in chat_history:
         chat_history[session_id] = {
             "messages": [],
-            "created_at": datetime.datetime.now().isoformat(),
-            "updated_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
             "title": "",
             "user_id": user_id
         }
@@ -472,7 +508,7 @@ async def chat(chat_request: ChatRequest, request: Request):
     chat_history[session_id]["messages"].append({
         "role": "user",
         "content": message,
-        "timestamp": datetime.datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat()
     })
     
     # 如果是首次消息，使用它作为会话标题
@@ -482,7 +518,7 @@ async def chat(chat_request: ChatRequest, request: Request):
         chat_history[session_id]["title"] = title
     
     # 更新会话最后修改时间
-    chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
+    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
     
     # 创建代理和获取回复
     agent = get_agent(session_id)
@@ -497,10 +533,10 @@ async def chat(chat_request: ChatRequest, request: Request):
             chat_history[session_id]["messages"].append({
                 "role": "assistant",
                 "content": content,
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "sources": sources
             })
-            chat_history[session_id]["updated_at"] = datetime.datetime.now().isoformat()
+            chat_history[session_id]["updated_at"] = datetime.now().isoformat()
         
         if email:
             await send_email_with_results(message, content, email, sources)

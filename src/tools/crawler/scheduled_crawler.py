@@ -93,7 +93,6 @@ class ScheduledCrawler:
                     task_name = task['task_name']
                     cron_expression = task['cron_expression']
                     scenario = task['scenario_name']
-                    collection_name = task['collection_name']
                     
                     # 解析关键词和平台列表
                     keywords = json.loads(task['keywords'])
@@ -222,18 +221,11 @@ class ScheduledCrawler:
             logger.error("搜索关键词列表为空，无法执行爬虫任务")
             return
         if not scenario:
-            scenario = self.crawler_manager.config.default_scenario
+            scenario = self.crawler_manager.config.get_default_scenario()
             
         search_url_formats = self.crawler_manager.config.get_search_url_formats(scenario)
         search_urls = self.crawler_manager.config.get_search_url(scenario)
 
-        if scenario == "healthcare":
-            platforms = ["web_site", "arxiv", "weixin"]
-        elif scenario == "ai":
-            platforms = ["web_site", "github", "arxiv", "weixin"]
-        else:
-            platforms = ["web_site", "weixin"]
-            
         if platforms is None:
             platforms = ["web_site", "weixin"]
             
@@ -340,9 +332,9 @@ class ScheduledCrawler:
         """
         if not self.scheduler.running:
             # 为特定场景添加定时任务
-            if scenario not in self.crawler_manager.config.supported_scenarios:
+            if scenario not in self.crawler_manager.config.get_available_scenarios():
                 logger.warning(f"不支持的场景: {scenario}，使用默认场景")
-                scenario = self.crawler_manager.config.default_scenario
+                scenario = self.crawler_manager.config.get_default_scenario()
             
             # 根据场景选择时间
             hour = 0

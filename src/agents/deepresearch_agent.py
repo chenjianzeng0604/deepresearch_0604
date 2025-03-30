@@ -105,8 +105,6 @@ class DeepresearchAgent:
             chat_history.append({"role": "user", "content": message.message})
             self.memory_manager.save_chat_history(self.session_id, chat_history)
         
-        yield {"type": "status", "content": "正在启动查询处理...", "phase": "init"}
-        
         try:
             # 使用带进度更新的研究方法
             research_results = {"results": []}
@@ -167,74 +165,39 @@ class DeepresearchAgent:
             chat_history = await self._get_conversation_history()
             
             if results:
-                # 发送起始信息
-                yield {"type": "status", "content": "信息检索完成，开始生成深度分析...", "phase": "analysis_start"}
-                
-                # 生成引用信息
-                sources = []
-                for i, result in enumerate(results):
-                    if 'url' in result and result['url']:
-                        source = {
-                            "index": i + 1,
-                            "url": result['url'],
-                            "title": result.get('title', f"参考来源 {i+1}"),
-                            "platform": result.get('platform', '未知来源')
-                        }
-                        sources.append(source)
-                
-                # 发送源数据信息
-                if sources:
-                    yield {"type": "sources", "content": sources}
-                
-                # 收集所有内容但不分段发送
                 all_summaries = []
                 for result in results:
                     if 'content' in result and result['content']:
                         all_summaries.append(result['content'])
                 
-                # 准备深度分析
                 if all_summaries:
-                    # 准备深度分析提示
                     yield {"type": "status", "content": "正在生成思考与分析...", "phase": "analysis_deep"}
                     
-                    # 构建分析上下文，包含历史对话和研究内容
                     analysis_context = {
                         "chat_history": chat_history,
                         "query": query,
                         "summaries": '\n'.join(all_summaries)
                     }
-                    
                     deep_analysis_prompt = PromptTemplates.format_deep_analysis_prompt(
                         query, 
                         '\n'.join(all_summaries),
                         context=json.dumps(analysis_context) if chat_history else ""
                     )
                     
-                    # 使用流式生成生成深度分析，并添加重试机制
                     max_retries = 3
                     retry_count = 0
-                    
                     while retry_count < max_retries:
                         try:
-                            # 流式生成分析内容
                             buffer = ""  # 用于缓冲少量token，以获得更流畅的体验
                             buffer_limit = 10  # 缓冲更多token后再发送，减少请求频率
-                            
                             async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
                                 buffer += chunk
-                                
-                                # 当缓冲区达到一定大小或收到特定标记时，发送数据
                                 if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
                                     yield {"type": "content", "content": buffer}
                                     buffer = ""
-                            
-                            # 发送剩余的缓冲区内容
                             if buffer:
                                 yield {"type": "content", "content": buffer}
-                            
-                            # 成功完成，跳出重试循环
                             break
-                            
                         except Exception as e:
                             retry_count += 1
                             if retry_count < max_retries:
@@ -245,38 +208,28 @@ class DeepresearchAgent:
                                 logger.error(f"流式连接最终失败: {str(e)}")
                                 yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
                                 raise
-                    
-                    # 标记分析完成
-                    yield {"type": "status", "content": "深度分析生成完成", "phase": "analysis_complete"}
                 else:
                     yield {"type": "status", "content": "无法生成深度分析，未找到有效内容", "phase": "analysis_error"}
                     yield {"type": "content", "content": "抱歉，我发现了一些相关信息，但无法生成有效的深度分析。请尝试使用更具体的查询。"}
             else:
                 # 如果没有找到研究结果，仅使用历史对话回复
                 yield {"type": "status", "content": "未找到相关信息，基于历史对话生成回复", "phase": "chat_response"}
-                
-                # 构建对话上下文
                 prompt = f"用户当前问题: {query}\n\n"
                 if chat_history:
                     prompt += "请基于以下历史对话回答用户的问题:\n\n"
                     for msg in chat_history:
                         role = "用户" if msg.get("role") == "user" else "助手"
                         prompt += f"{role}: {msg.get('content', '')}\n\n"
-                
                 try:
                     buffer = ""
                     buffer_limit = 10
-                    
                     async for chunk in self.llm_client.generate_with_streaming(prompt):
                         buffer += chunk
                         if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
                             yield {"type": "content", "content": buffer}
                             buffer = ""
-                    
-                    # 发送剩余的缓冲区内容
                     if buffer:
                         yield {"type": "content", "content": buffer}
-                        
                 except Exception as e:
                     logger.error(f"流式连接最终失败: {str(e)}")
                     yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
@@ -340,91 +293,116 @@ class DeepresearchAgent:
         query = message.message
         
         # 识别意图
-        yield {"type": "status", "content": "正在分析您的查询意图...", "phase": "intent"}
         intent = await self._recognize_intent(query)
         
-        # 根据意图选择适合的平台组合
-        platforms = self._get_platforms_by_intent(intent, message)
-        
         # 生成搜索查询
-        yield {"type": "status", "content": "正在生成优化的搜索查询...", "phase": "queries"}
         search_queries = await self._generate_search_queries(message)
-        
-        # 研究阶段
-        yield {"type": "status", "content": "开始收集相关资料...", "phase": "research"}
+        yield {"type": "status", "phase": "queries", "query_list": search_queries}
         
         all_results = []
-        
-        # 对每个查询和平台进行搜索
         iteration_count = 0
-        search_count = 0
-        total_searches = len(search_queries) * len(platforms)
-        
-        # 限制查询次数以控制耗时
-        while iteration_count < self.research_max_iterations and search_count < total_searches:
+        while iteration_count < self.research_max_iterations:
             for query in search_queries:
-                for platform in platforms:
-                    search_count += 1
-                    progress_percent = int((search_count / total_searches) * 100)
-                    yield {
-                        "type": "status", 
-                        "content": f"正在从{platform}搜索: '{query}' ({progress_percent}%)", 
-                        "phase": "research",
-                        "progress": progress_percent
-                    }
-                    
-                    try:
-                        platform_results = await self.crawler_manager.search(
-                            platform=platform, 
-                            query=query, 
-                            session_id=self.session_id
-                        )
-                        
-                        # 添加平台标识到结果中
-                        for result in platform_results:
-                            result['platform'] = platform
-                            if platform not in result.get('tags', []):
-                                result.setdefault('tags', []).append(platform)
-                        
-                        all_results.extend(platform_results)
-                        
-                        yield {
-                            "type": "status", 
-                            "content": f"从{platform}获取到{len(platform_results)}条结果", 
-                            "phase": "research"
-                        }
-                    except Exception as e:
-                        logger.error(f"从{platform}搜索'{query}'时出错: {str(e)}", exc_info=True)
-                        yield {"type": "status", "content": f"从{platform}搜索时出现错误: {str(e)}", "phase": "research"}
-            
-            # 评估已获取的信息是否足够
-            if await self._evaluate_information_sufficiency(query, all_results):
-                yield {"type": "status", "content": "已收集足够的相关信息", "phase": "research"}
+                try:
+                    url_formats = self.crawler_config.get_search_url_formats(intent)
+                    all_urls = set()
+                    for platform, url_format in url_formats.items():
+                        if 'arxiv' in platform:
+                            sub_urls = await self.crawler_manager.arxiv_crawler.parse_sub_url(query)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.arxiv_crawler.fetch_article_stream(sub_urls):
+                                all_results.append(result)
+                                yield {
+                                    "type": "status", 
+                                    "result": result,
+                                    "phase": "research_detail"
+                                }
+                        elif 'github' in platform:
+                            sub_urls = await self.crawler_manager.github_crawler.parse_sub_url(query)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.github_crawler.fetch_article_stream(sub_urls):
+                                all_results.append(result)
+                                yield {
+                                    "type": "status", 
+                                    "result": result,
+                                    "phase": "research_detail"
+                                }
+                        else:
+                            search_url = url_format.format(quote(query))
+                            sub_urls = await self.crawler_manager.web_crawler.parse_sub_url(search_url)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.web_crawler.fetch_article_stream(sub_urls):
+                                all_results.append(result)
+                                yield {
+                                    "type": "status", 
+                                    "result": result,
+                                    "phase": "research_detail"
+                                }
+                except Exception as e:
+                    logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}", exc_info=True)
+
+            yield {"type": "status", "phase": "vector_search", "scenario": intent}
+            all_contents = milvus_dao.search(
+                collection_name=self.crawler_config.get_collection_name(intent),
+                data=milvus_dao.generate_embeddings(search_queries),
+                limit=self.summary_limit,
+                output_fields=["url", "content"],
+            )
+            unique_contents = {}
+            for query_contents in all_contents:
+                if not query_contents:
+                    continue
+                for contents in query_contents:
+                    entity = contents['entity']
+                    if isinstance(entity, dict) and 'content' in entity and entity['content'] and len(entity['content'].strip()) > 0 and 'url' in entity and entity['url'] not in unique_contents:
+                        unique_contents[entity['url']] = entity
+            result = list(unique_contents.values())
+            if result:
+                yield {"type": "status", "phase": "vector_search_detail", "result": result}
+                all_results.extend(result)
+
+            if len(all_results) >= self.summary_limit:
                 break
-            
-            # 如果信息不足且未达到最大迭代次数，生成额外查询
+            if await self._evaluate_information_sufficiency(query, all_results):
+                break
             if iteration_count < self.research_max_iterations - 1:
-                yield {"type": "status", "content": "正在深入分析，生成更精确的查询...", "phase": "research"}
                 additional_queries = await self._generate_additional_queries(query, all_results)
                 search_queries = additional_queries
-                total_searches = len(search_queries) * len(platforms)
-                search_count = 0
-            
+                yield {"type": "status", "phase": "queries", "query_list": search_queries}
             iteration_count += 1
 
-        # 异步保存到向量数据库，不阻塞主流程
         asyncio.create_task(self._async_save_to_vectordb(query, intent, all_results.copy()))
         
-        # 裁剪结果到限制数量
         if len(all_results) > self.summary_limit:
             all_results = all_results[:self.summary_limit]
         
-        if not all_results:
-            yield {"type": "status", "content": "未找到相关信息", "phase": "no_results"}
-        else:
-            yield {"type": "status", "content": f"共收集到{len(all_results)}条相关资料", "phase": "research_complete"}
-        
-        # 不用return，改用yield返回最终结果
         yield {"type": "research_results", "data": {"results": all_results}}
 
     async def _async_save_to_vectordb(self, query, scenario, results):
@@ -558,55 +536,7 @@ class DeepresearchAgent:
                 prompt=prompt,
                 system_message=PromptTemplates.get_system_message()
             )
-            scenario = response.strip().lower()
-            if scenario in self.crawler_config.supported_scenarios:
-                logger.info(f"查询 '{query}' 识别为场景: {scenario}")
-                return scenario
-            else:
-                logger.warning(f"意图识别返回了不支持的场景: {scenario}，使用默认场景")
-                return self.crawler_config.default_scenario
+            return response.strip().lower()
         except Exception as e:
             logger.error(f"意图识别出错: {str(e)}")
-            return self.crawler_config.default_scenario
-
-    def _get_platforms_by_intent(self, intent: str, message: ChatMessage) -> List[str]:
-        """
-        根据意图选择适合的平台组合
-        
-        Args:
-            intent: 识别的意图
-            message: 用户消息
-            
-        Returns:
-            List[str]: 适合的平台组合
-        """
-        # 获取所有可用平台
-        available_platforms = self.crawler_config.get_available_platforms()
-        
-        # 从数据库获取该意图对应的场景
-        scenario = intent  # 意图名称作为场景名称
-        
-        # 根据场景从数据库获取平台配置
-        try:
-            # 尝试从数据库获取场景对应的平台
-            platforms = self.crawler_manager.get_platforms_by_scenario(scenario)
-            logger.info(f"从数据库获取场景 '{scenario}' 的平台: {platforms}")
-        except Exception as e:
-            logger.error(f"从数据库获取平台时出错: {str(e)}")
-            # 发生错误时使用默认平台
-            platforms = []
-        
-        # 确保平台列表中的平台在可用平台列表中
-        platforms = [p for p in platforms if p in available_platforms]
-        
-        # 确保至少有一个平台
-        if not platforms:
-            platforms = ["web_site"]
-            logger.warning(f"未找到场景 '{scenario}' 对应的平台，使用默认平台: {platforms}")
-            
-        # 限制平台数量，避免请求过多
-        max_platforms = int(os.getenv("MAX_SEARCH_PLATFORMS", "6"))
-        if len(platforms) > max_platforms:
-            platforms = platforms[:max_platforms]
-        
-        return platforms
+            return self.crawler_config.get_default_scenario()

@@ -1254,9 +1254,8 @@ class CrawlerConfigManager(MySQLBase):
                 cursor.execute(
                     """
                     SELECT u.platform, u.url_pattern
-                    FROM crawler_scenario_url_formats su
-                    JOIN crawler_url_formats u ON su.url_format_id = u.id
-                    JOIN crawler_scenarios s ON su.scenario_id = s.id
+                    FROM crawler_url_formats u
+                    JOIN crawler_scenarios s ON u.scenario_id = s.id
                     WHERE s.name = %s
                     """,
                     (scenario_name,)

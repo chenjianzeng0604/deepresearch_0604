@@ -15,7 +15,7 @@ import asyncio
 import logging
 import re
 import os
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from urllib.parse import urlparse, urljoin, quote
 import aiohttp
 import requests
@@ -299,6 +299,54 @@ class WebCrawler:
             
         logger.info(f"将处理{len(links_to_fetch)}/{len(unique_links)} 个链接 (过滤掉 {len(all_existing_urls)} 个已存在链接)")
         return links_to_fetch
+
+    async def fetch_article_stream(self, links: List[str]) -> AsyncGenerator[dict, None]:
+        """
+        流式获取文章内容并保存到Milvus
+        
+        Args:
+            links: 链接列表
+        
+        Yields:
+            dict: 包含url/content/error的字典对象
+        """
+        if not links:
+            logger.warning("没有有效链接可爬取")
+            return
+        sem = asyncio.Semaphore(self.crawler_fetch_article_with_semaphore)
+        async def process_link(link: str) -> dict:
+            """处理单个链接的异步任务"""
+            try:
+                async with sem:
+                    if self.is_pdf_url(link):
+                        content = await self.extract_pdf(link)
+                    else:
+                        content = await self.fetch_url_md(link)
+                    clean_content = content.strip() if content else ""
+                    return {"url": link, "content": clean_content}
+            except asyncio.CancelledError:
+                logger.warning(f"任务取消: {link}")
+                return {"url": link, "error": "任务取消"}
+            except Exception as e:
+                logger.error(f"处理失败: {link} - {str(e)}")
+                return {"url": link, "error": str(e)}
+        max_links = min(self.crawler_max_links_result, len(links))
+        tasks = [
+            asyncio.create_task(process_link(link))
+            for link in links[:max_links]
+        ]
+        try:
+            for future in asyncio.as_completed(tasks):
+                try:
+                    result = await future
+                    yield result
+                except Exception as e:
+                    logger.error(f"任务异常: {str(e)}")
+                    yield {"error": str(e)}
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
 
     async def fetch_article(self, links: List[str]) -> List[str]:
         """
@@ -1187,85 +1235,3 @@ class CrawlerManager:
         self.web_crawler = WebCrawler()
         self.wechat_crawler = WeChatOfficialAccountCrawler()
         
-    def get_platforms_by_scenario(self, scenario: str) -> List[str]:
-        """
-        根据场景获取对应的平台列表
-        
-        Args:
-            scenario: 场景名称，如 'general', 'academic', 'news' 等
-            
-        Returns:
-            List[str]: 该场景下应该使用的平台列表
-        """
-        try:
-            if hasattr(self.config, 'db_manager') and self.config.db_manager:
-                platforms = self.config.db_manager.get_platforms_by_scenario_name(scenario)
-                if platforms:
-                    logger.info(f"从数据库获取场景'{scenario}'的平台: {platforms}")
-                    return platforms
-            return []  
-        except Exception as e:
-            logger.error(f"获取场景'{scenario}'对应平台时出错: {str(e)}")
-            return []
-
-    async def search(self, platform, query, session_id=None):
-        """
-        根据平台选择合适的爬虫进行搜索
-        
-        Args:
-            platform: 平台名称，如 'arxiv', 'github', 'web_site', 'wechat'
-            query: 搜索查询词
-            session_id: 会话ID，用于标识搜索任务
-            
-        Returns:
-            List[Dict]: 搜索结果列表
-        """
-        results = []
-        try:
-            if platform == 'arxiv':
-                # 使用ArxivCrawler搜索
-                urls = await self.arxiv_crawler.parse_sub_url(query)
-                for url in urls:
-                    try:
-                        content = await self.arxiv_crawler.crawl_url(url)
-                        if content:
-                            results.append(content)
-                    except Exception as e:
-                        continue
-            
-            elif platform == 'github':
-                # 使用GithubCrawler搜索
-                urls = await self.github_crawler.parse_sub_url(query)
-                for url in urls:
-                    try:
-                        content = await self.github_crawler.crawl_url(url)
-                        if content:
-                            results.append(content)
-                    except Exception as e:
-                        continue
-            
-            elif platform == 'wechat':
-                # 使用WeChatOfficialAccountCrawler搜索
-                urls = await self.wechat_crawler.parse_sub_url(query)
-                for url in urls:
-                    try:
-                        content = await self.wechat_crawler.crawl_url(url)
-                        if content:
-                            results.append(content)
-                    except Exception as e:
-                        continue
-            
-            elif platform == 'web_site' or platform == 'web':
-                # 使用通用WebCrawler搜索
-                urls = await self.web_crawler.parse_sub_url(query)
-                for url in urls:
-                    try:
-                        content = await self.web_crawler.crawl_url(url)
-                        if content:
-                            results.append(content)
-                    except Exception as e:
-                        continue
-        except Exception as e:
-            logger.error(f"在{platform}平台搜索{query}时出错: {str(e)}", exc_info=True)
-            
-        return results

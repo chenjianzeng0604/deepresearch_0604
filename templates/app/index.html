@@ -328,8 +328,8 @@
         /* 消息展开/收缩的箭头图标 */
         .toggle-collapse {
             position: absolute;
-            bottom: 5px;
-            right: 10px;
+            top: 2px;
+            right: 2px;
             background-color: white;
             border: 1px solid #eaeaea;
             border-radius: 50%;
@@ -1146,13 +1146,7 @@
         .user-display-name {
             font-size: 14px;
             font-weight: 500;
-            color: var(--text-primary);
-            max-width: calc(100% - 45px);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            position: relative;
-            padding-left: 24px;
+            flex: 1;
         }
 
         .user-display-name::before {
@@ -1191,6 +1185,93 @@
 
         .logout-item:hover i {
             color: var(--primary-dark);
+        }
+        
+        /* 聊天气泡中的可折叠思考过程样式 */
+        .assistant-message details {
+            margin: 8px 0;
+            background-color: rgba(240, 240, 240, 0.5);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .assistant-message details summary {
+            padding: 8px 12px;
+            background-color: rgba(230, 230, 230, 0.7);
+            cursor: pointer;
+            user-select: none;
+            font-weight: 500;
+            position: relative;
+        }
+
+        .assistant-message details summary:hover {
+            background-color: rgba(220, 220, 220, 0.8);
+        }
+
+        .assistant-message details summary::marker,
+        .assistant-message details::-webkit-details-marker {
+            display: none;
+        }
+
+        .assistant-message details summary::after {
+            content: '▼';
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 12px;
+            transition: transform 0.2s;
+        }
+
+        .assistant-message details[open] summary::after {
+            transform: translateY(-50%) rotate(180deg);
+        }
+
+        .assistant-message details > div {
+            padding: 10px 15px;
+        }
+
+        /* 研究结论样式 */
+        .assistant-message h3 {
+            margin-top: 16px;
+            margin-bottom: 8px;
+            font-size: 18px;
+            color: #333;
+            border-bottom: 1px solid #eaeaea;
+            padding-bottom: 6px;
+        }
+
+        /* 模型思考和最终答案样式 */
+        .assistant-message .model-thinking {
+            background-color: rgba(245, 245, 245, 0.6);
+            border-left: 3px solid #6b7280;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 0 4px 4px 0;
+        }
+
+        .assistant-message .model-thinking h4 {
+            color: #4b5563;
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .assistant-message .final-answer {
+            background-color: rgba(240, 249, 255, 0.7);
+            border-left: 3px solid #1890ff;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 0 4px 4px 0;
+        }
+
+        .assistant-message .final-answer h4 {
+            color: #1890ff;
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 15px;
+            font-weight: 500;
         }
     </style>
 </head>
@@ -1380,34 +1461,27 @@
                         if (session.id === sessionId) {
                             historyItem.classList.add('active');
                         }
-                        
-                        // 使用第一条消息内容作为标题
-                        let sessionTitle = '新对话';
+                        let sessionTitle = '';
                         if (session.title) {
                             sessionTitle = session.title;
                         } else if (session.messages && session.messages.length > 0) {
-                            // 兼容方式：从消息数组中查找第一条用户消息
                             const firstMessage = session.messages.find(msg => msg.role === 'user')?.content;
                             if (firstMessage) {
                                 sessionTitle = firstMessage.length > 30 ? 
                                     firstMessage.substring(0, 30): firstMessage;
                             }
                         }
-                        
-                        // 会话标题（第一个问题）
-                        const title = document.createElement('div');
-                        title.className = 'history-item-title';
-                        title.textContent = sessionTitle;
-                        
-                        historyItem.appendChild(title);
-                        
-                        // 点击加载该会话
-                        historyItem.addEventListener('click', function() {
-                            console.log(`加载会话: ${session.id}`); // 调试日志
-                            window.location.href = `/?session_id=${session.id}`;
-                        });
-                        
-                        historyList.appendChild(historyItem);
+                        if (sessionTitle != '') {
+                            const title = document.createElement('div');
+                            title.className = 'history-item-title';
+                            title.textContent = sessionTitle;
+                            historyItem.appendChild(title);
+                            historyItem.addEventListener('click', function() {
+                                console.log(`加载会话: ${session.id}`); // 调试日志
+                                window.location.href = `/?session_id=${session.id}`;
+                            });
+                            historyList.appendChild(historyItem);
+                        }
                     });
                 })
                 .catch(error => {
@@ -1509,6 +1583,7 @@
 
         // 添加消息到聊天界面
         function addMessage(content, role, isStreaming = false) {
+            console.log('添加消息:', content, role, isStreaming);
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}-message`;
             if (role === 'assistant' && !isStreaming) {
@@ -1549,10 +1624,8 @@
                                     break;
                                 }
                             }
-                            
                             // 添加语言标记
                             pre.setAttribute('data-language', language);
-                            
                             // 代码高亮
                             hljs.highlightElement(codeBlock);
                         }
@@ -1565,11 +1638,9 @@
                 // 如果消息被折叠，也更新预览文本
                 const previewText = document.createElement('div');
                 previewText.className = 'preview-text';
-                
                 // 提取最后一段文本用于预览
                 const lastParagraph = getLastParagraph(content);
                 previewText.textContent = lastParagraph;
-                
                 // 添加展开/收缩按钮
                 const toggleButton = document.createElement('button');
                 toggleButton.className = 'toggle-collapse';
@@ -1577,26 +1648,22 @@
                 toggleButton.addEventListener('click', function() {
                     messageDiv.classList.toggle('collapsed');
                 });
-                
                 messageDiv.appendChild(previewText);
                 messageDiv.appendChild(toggleButton);
             }
-            
             // 组装消息
             messageDiv.appendChild(contentDiv);
             messageDiv.appendChild(timestamp);
-            
             // 添加到消息容器
             messagesContainer.appendChild(messageDiv);
-            
             // 滚动到底部
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
             return messageDiv;
         }
         
         // 处理SSE消息事件
         function handleSSE(data) {
+            console.log('处理SSE消息:', data);
             if (!data || !data.event) return;
             
             switch (data.event) {
@@ -1708,7 +1775,40 @@
             // 监听消息事件
             let isFirstChunk = true;
             let assistantContent = '';
+            
+            // 添加对不同类型事件的监听
+            eventSource.addEventListener('content', function(event) {
+                console.log('收到内容事件:', event.data);
+                assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
+                isFirstChunk = false;
+            });
+            
+            eventSource.addEventListener('status', function(event) {
+                console.log('收到状态事件:', event.data);
+                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+            });
+            
+            eventSource.addEventListener('sources', function(event) {
+                console.log('收到来源事件:', event.data);
+                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+            });
+            
+            eventSource.addEventListener('error', function(event) {
+                console.log('收到错误事件:', event.data);
+                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+            });
+            
+            eventSource.addEventListener('complete', function(event) {
+                console.log('收到完成事件:', event.data);
+                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+                eventSource.close();
+                eventSource = null;
+                enableUserInput();
+            });
+            
+            // 默认消息处理
             eventSource.onmessage = function(event) {
+                console.log('收到默认消息:', event.data);
                 assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
                 isFirstChunk = false;
             };
@@ -1733,39 +1833,53 @@
                     const contentDiv = currentAssistantMessage.querySelector('.message-content');
                     if (contentDiv) {
                         if (jsonData.content) {
-                            contentDiv.innerHTML = marked.parse(jsonData.content);
+                            // 检查是否是思考过程或最终总结
+                            const sectionType = jsonData.section_type || '';
+                            const contentText = jsonData.content || '';
+                            const currentDivContent = contentDiv.innerHTML || '';
+                            contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
+                            console.log('contentText:' + contentText);
                             
-                            // 处理代码块的语法高亮和语言标记
-                            const preBlocks = contentDiv.querySelectorAll('pre');
-                            preBlocks.forEach(pre => {
-                                const codeBlock = pre.querySelector('code');
-                                if (codeBlock) {
-                                    // 检测语言类
-                                    const classes = codeBlock.className.split(' ');
-                                    let language = 'text';
+                            // 处理代码块的语法高亮
+                            contentDiv.querySelectorAll('pre code').forEach((block) => {
+                                if (!block.classList.contains('hljs')) {
+                                    hljs.highlightElement(block);
                                     
-                                    for (const cls of classes) {
-                                        if (cls.startsWith('language-')) {
-                                            language = cls.replace('language-', '');
-                                            break;
+                                    // 获取代码块的父元素
+                                    const preBlock = block.parentElement;
+                                    if (preBlock) {
+                                        // 检测语言类
+                                        const classes = block.className.split(' ');
+                                        let language = 'text';
+                                        
+                                        for (const cls of classes) {
+                                            if (cls.startsWith('language-')) {
+                                                language = cls.replace('language-', '');
+                                                break;
+                                            }
                                         }
+                                        
+                                        // 添加语言标记
+                                        preBlock.setAttribute('data-language', language);
                                     }
-                                    
-                                    // 添加语言标记
-                                    pre.setAttribute('data-language', language);
-                                    
-                                    // 代码高亮
-                                    hljs.highlightElement(codeBlock);
                                 }
                             });
-                        }
-                        
-                        // 如果消息被折叠，也更新预览文本
-                        const previewText = currentAssistantMessage.querySelector('.preview-text');
-                        if (previewText) {
-                            // 获取最后一段文本用于预览
-                            const lastParagraph = getLastParagraph(jsonData.content || '');
-                            previewText.textContent = lastParagraph;
+                            
+                            // 如果消息被折叠，也更新预览文本
+                            const previewText = currentAssistantMessage.querySelector('.preview-text');
+                            if (previewText) {
+                                // 获取最后一段文本用于预览
+                                const lastParagraph = getLastParagraph(jsonData.content || '');
+                                previewText.textContent = lastParagraph;
+                            }
+                            
+                            // 如果不是收缩状态，自动滚动到底部
+                            if (!currentAssistantMessage.classList.contains('collapsed')) {
+                                messagesContainer.scrollTo({
+                                    top: messagesContainer.scrollHeight,
+                                    behavior: 'smooth'
+                                });
+                            }
                         }
                     }
                 }
@@ -1793,33 +1907,62 @@
                 if (currentAssistantMessage) {
                     const contentDiv = currentAssistantMessage.querySelector('.message-content');
                     if (contentDiv) {
-                        // 尝试将文本解析为Markdown
-                        try {
-                            // 追加新内容并渲染为Markdown
-                            const newContent = currentContent + data;
-                            contentDiv.innerHTML = marked.parse(newContent);
+                        if (jsonData.content) {
+                            // 检查是否是思考过程或最终总结
+                            const sectionType = jsonData.section_type || '';
+                            const contentText = jsonData.content || '';
+                            
+                            // 特殊处理思考开始标记
+                            if (jsonData.type === 'thought_start') {
+                                // 直接使用markdown渲染详情标签
+                                contentDiv.innerHTML += marked.parse(contentText);
+                            } 
+                            // 特殊处理思考结束标记
+                            else if (jsonData.type === 'thought_end') {
+                                contentDiv.innerHTML += marked.parse(contentText);
+                            }
+                            // 特殊处理模型思考开始标记
+                            else if (jsonData.type === 'model_thinking_start') {
+                                contentDiv.innerHTML += marked.parse(contentText);
+                            }
+                            // 特殊处理模型思考结束标记
+                            else if (jsonData.type === 'model_thinking_end') {
+                                contentDiv.innerHTML += marked.parse(contentText);
+                            }
+                            // 特殊处理最终答案结束标记
+                            else if (jsonData.type === 'final_answer_end') {
+                                contentDiv.innerHTML += marked.parse(contentText);
+                            }
+                            // 普通内容添加
+                            else {
+                                // 旧内容
+                                const currentDivContent = contentDiv.innerHTML || '';
+                                // 追加新内容并用Markdown渲染
+                                contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
+                            }
                             
                             // 处理代码块的语法高亮
-                            const preBlocks = contentDiv.querySelectorAll('pre');
-                            preBlocks.forEach(pre => {
-                                const codeBlock = pre.querySelector('code');
-                                if (codeBlock) {
-                                    // 检测语言类
-                                    const classes = codeBlock.className.split(' ');
-                                    let language = 'text';
+                            contentDiv.querySelectorAll('pre code').forEach((block) => {
+                                if (!block.classList.contains('hljs')) {
+                                    hljs.highlightElement(block);
                                     
-                                    for (const cls of classes) {
-                                        if (cls.startsWith('language-')) {
-                                            language = cls.replace('language-', '');
-                                            break;
+                                    // 获取代码块的父元素
+                                    const preBlock = block.parentElement;
+                                    if (preBlock) {
+                                        // 检测语言类
+                                        const classes = block.className.split(' ');
+                                        let language = 'text';
+                                        
+                                        for (const cls of classes) {
+                                            if (cls.startsWith('language-')) {
+                                                language = cls.replace('language-', '');
+                                                break;
+                                            }
                                         }
+                                        
+                                        // 添加语言标记
+                                        preBlock.setAttribute('data-language', language);
                                     }
-                                    
-                                    // 添加语言标记
-                                    pre.setAttribute('data-language', language);
-                                    
-                                    // 代码高亮
-                                    hljs.highlightElement(codeBlock);
                                 }
                             });
                             
@@ -1827,24 +1970,31 @@
                             const previewText = currentAssistantMessage.querySelector('.preview-text');
                             if (previewText) {
                                 // 获取最后一段文本用于预览
-                                const lastParagraph = getLastParagraph(newContent);
+                                const lastParagraph = getLastParagraph(jsonData.content || '');
                                 previewText.textContent = lastParagraph;
                             }
                             
-                            return newContent;
-                        } catch (renderError) {
-                            // 直接作为文本添加
-                            contentDiv.textContent += data;
-                            return currentContent + data;
+                            // 如果不是收缩状态，自动滚动到底部
+                            if (!currentAssistantMessage.classList.contains('collapsed')) {
+                                messagesContainer.scrollTo({
+                                    top: messagesContainer.scrollHeight,
+                                    behavior: 'smooth'
+                                });
+                            }
                         }
                     }
                 }
                 
-                return currentContent + data;
+                // 自动滚动到底部
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                
+                return jsonData.content || currentContent;
             }
             
             // 自动滚动到底部
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            return jsonData.content || currentContent;
         }
         
         // 处理SSE错误
