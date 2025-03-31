@@ -373,8 +373,8 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
                         yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "research_detail":
                         result = chunk.get("result", "")
-                        if result and result['url'] and result['content']:
-                            result_display = f"\n\n• {result['url']}\n\n{result['content'][:30]}"
+                        if result:
+                            result_display = f"\n\n• {result['url']}\n\n{result['title']}"
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "vector_search":
                         scenario = chunk.get("scenario", "")
@@ -383,7 +383,7 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
                     elif chunk_phase == "vector_search_detail":
                         result = chunk.get("result", "")
                         if result:
-                            result_display = f"\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['content'][:30]}" for item in result])
+                            result_display = f"\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "analysis_deep":
                         is_analysis_phase = True

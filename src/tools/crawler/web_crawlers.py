@@ -19,6 +19,9 @@ from typing import List, Optional, AsyncGenerator
 from urllib.parse import urlparse, urljoin, quote
 import aiohttp
 import requests
+import pdfplumber
+import io
+from pdfminer.layout import LAParams
 
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
@@ -28,7 +31,7 @@ import uuid
 import json
 import pickle
 from src.prompts.prompt_templates import PromptTemplates
-from datetime import datetime
+from datetime import datetime, timezone
 from src.model.llm_client import llm_client
 from playwright.async_api import async_playwright
 from src.tools.crawler.cloudflare_bypass import CloudflareBypass
@@ -36,6 +39,7 @@ from src.database.vectordb.schema_manager import MilvusSchemaManager
 from src.tools.crawler.config import crawler_config
 from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM
 import torch
+from src.utils.json_parser import str2Json
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,7 @@ class WebCrawler:
         self.crawler_fetch_url_retry_delay = int(os.getenv("CRAWLER_FETCH_URL_RETRY_DELAY", 2))
         self.llm_client = llm_client
         self.article_trunc_word_count = int(os.getenv("ARTICLE_TRUNC_WORD_COUNT", 10000))
+        self.article_compress_word_count = int(os.getenv("ARTICLE_COMPRESS_WORD_COUNT", 5000))
         
     def is_valid_url(self, url: str, base_domain: Optional[str] = None) -> bool:
         """
@@ -300,7 +305,7 @@ class WebCrawler:
         logger.info(f"将处理{len(links_to_fetch)}/{len(unique_links)} 个链接 (过滤掉 {len(all_existing_urls)} 个已存在链接)")
         return links_to_fetch
 
-    async def fetch_article_stream(self, links: List[str]) -> AsyncGenerator[dict, None]:
+    async def fetch_article_stream(self, links: List[str], scenario: str) -> AsyncGenerator[dict, None]:
         """
         流式获取文章内容并保存到Milvus
         
@@ -323,7 +328,21 @@ class WebCrawler:
                     else:
                         content = await self.fetch_url_md(link)
                     clean_content = content.strip() if content else ""
-                    return {"url": link, "content": clean_content}
+                    if not clean_content:
+                        return {"url": link, "content": "", "title": ""}
+                    article_quality_prompt = PromptTemplates.format_article_quality_prompt(
+                        article=clean_content, word_count=self.article_trunc_word_count)
+                    logger.info(f"文章质量评估提示词: {article_quality_prompt}")
+                    response = await self.llm_client.generate(article_quality_prompt)
+                    quality_result = str2Json(response)
+                    logger.info(f"文章质量评估结果: {quality_result}")
+                    if not quality_result or not quality_result.get("high_quality", False):
+                        return {"url": link, "content": "", "title": ""}
+                    if quality_result.get("compress"):
+                        content = quality_result.get("compressed_article")
+                    result = {"url": link, "content": content, "title": quality_result.get("title")}
+                    asyncio.create_task(self.save_article([result], scenario))
+                    return result
             except asyncio.CancelledError:
                 logger.warning(f"任务取消: {link}")
                 return {"url": link, "error": "任务取消"}
@@ -449,6 +468,7 @@ class WebCrawler:
                         data_item = {
                             "id": str(uuid.uuid4()),
                             "url": result['url'],
+                            "title": result['title'],
                             "content": content,
                             "content_emb": content_embs[0],
                             "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)

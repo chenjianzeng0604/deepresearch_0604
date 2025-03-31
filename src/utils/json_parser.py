@@ -18,7 +18,7 @@ def str2Json(response: str) -> Dict[str, Any]:
         try:
             return json.loads(response.strip())
         except:
-            logger.warn(f"解析JSON字符串时出错，原始响应: {response}")
+            logger.warning(f"解析JSON字符串时出错，原始响应: {response}")
             pass
 
         # 尝试从响应中提取JSON部分

@@ -31,6 +31,7 @@ class MilvusSchemaManager:
             )
             schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=36)
             schema.add_field("url", DataType.VARCHAR, max_length=500)
+            schema.add_field("title", DataType.VARCHAR, max_length=500)
             schema.add_field("content", DataType.VARCHAR, max_length=65535)
             schema.add_field("create_time", DataType.INT64)
             schema.add_field("content_emb", DataType.FLOAT_VECTOR, dim=1024)

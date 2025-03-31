@@ -40,7 +40,7 @@ class EmbeddingModelManager:
         os.environ["http_proxy"] = ""
         os.environ["https_proxy"] = ""
         os.environ["NO_PROXY"] = "*"
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local_models")
+        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "local_models")
         os.makedirs(cache_dir, exist_ok=True)
         os.environ["HF_HOME"] = cache_dir
         os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"

@@ -302,78 +302,13 @@ class DeepresearchAgent:
         all_results = []
         iteration_count = 0
         while iteration_count < self.research_max_iterations:
-            for query in search_queries:
-                try:
-                    url_formats = self.crawler_config.get_search_url_formats(intent)
-                    all_urls = set()
-                    for platform, url_format in url_formats.items():
-                        if 'arxiv' in platform:
-                            sub_urls = await self.crawler_manager.arxiv_crawler.parse_sub_url(query)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.arxiv_crawler.fetch_article_stream(sub_urls):
-                                all_results.append(result)
-                                yield {
-                                    "type": "status", 
-                                    "result": result,
-                                    "phase": "research_detail"
-                                }
-                        elif 'github' in platform:
-                            sub_urls = await self.crawler_manager.github_crawler.parse_sub_url(query)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.github_crawler.fetch_article_stream(sub_urls):
-                                all_results.append(result)
-                                yield {
-                                    "type": "status", 
-                                    "result": result,
-                                    "phase": "research_detail"
-                                }
-                        else:
-                            search_url = url_format.format(quote(query))
-                            sub_urls = await self.crawler_manager.web_crawler.parse_sub_url(search_url)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.web_crawler.fetch_article_stream(sub_urls):
-                                all_results.append(result)
-                                yield {
-                                    "type": "status", 
-                                    "result": result,
-                                    "phase": "research_detail"
-                                }
-                except Exception as e:
-                    logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}", exc_info=True)
 
             yield {"type": "status", "phase": "vector_search", "scenario": intent}
             all_contents = milvus_dao.search(
                 collection_name=self.crawler_config.get_collection_name(intent),
                 data=milvus_dao.generate_embeddings(search_queries),
-                limit=self.summary_limit,
-                output_fields=["url", "content"],
+                limit=self.vectordb_limit,
+                output_fields=["url", "title", "content"],
             )
             unique_contents = {}
             for query_contents in all_contents:
@@ -388,6 +323,81 @@ class DeepresearchAgent:
                 yield {"type": "status", "phase": "vector_search_detail", "result": result}
                 all_results.extend(result)
 
+            for query in search_queries:
+                if len(all_results) >= self.summary_limit:
+                    break
+                try:
+                    url_formats = self.crawler_config.get_search_url_formats(intent)
+                    all_urls = set()
+
+                    for platform, url_format in url_formats.items():
+                        if len(all_results) >= self.summary_limit:
+                            break
+
+                        if 'arxiv' in platform:
+                            sub_urls = await self.crawler_manager.arxiv_crawler.parse_sub_url(query)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.arxiv_crawler.fetch_article_stream(sub_urls, intent):
+                                if result['content'] and len(result['content'].strip()) > 0:
+                                    all_results.append(result)
+                                    yield {
+                                        "type": "status", 
+                                        "result": result,
+                                        "phase": "research_detail"
+                                    }
+                        elif 'github' in platform:
+                            sub_urls = await self.crawler_manager.github_crawler.parse_sub_url(query)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.github_crawler.fetch_article_stream(sub_urls, intent):
+                                if result['content'] and len(result['content'].strip()) > 0:
+                                    all_results.append(result)
+                                    yield {
+                                        "type": "status", 
+                                        "result": result,
+                                        "phase": "research_detail"
+                                    }
+                        else:
+                            search_url = url_format.format(quote(query))
+                            sub_urls = await self.crawler_manager.web_crawler.parse_sub_url(search_url)
+                            sub_urls = [url for url in sub_urls if url not in all_urls]
+                            if not sub_urls:
+                                continue
+                            yield {
+                                "type": "status", 
+                                "query": query,
+                                "platform": platform,
+                                "phase": "research"
+                            }
+                            all_urls.update(sub_urls)
+                            async for result in self.crawler_manager.web_crawler.fetch_article_stream(sub_urls, intent):
+                                if result['content'] and len(result['content'].strip()) > 0:
+                                    all_results.append(result)
+                                    yield {
+                                        "type": "status", 
+                                        "result": result,
+                                        "phase": "research_detail"
+                                    }
+                except Exception as e:
+                    logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}", exc_info=True)
+
             if len(all_results) >= self.summary_limit:
                 break
             if await self._evaluate_information_sufficiency(query, all_results):
@@ -397,32 +407,11 @@ class DeepresearchAgent:
                 search_queries = additional_queries
                 yield {"type": "status", "phase": "queries", "query_list": search_queries}
             iteration_count += 1
-
-        asyncio.create_task(self._async_save_to_vectordb(query, intent, all_results.copy()))
         
         if len(all_results) > self.summary_limit:
             all_results = all_results[:self.summary_limit]
         
         yield {"type": "research_results", "data": {"results": all_results}}
-
-    async def _async_save_to_vectordb(self, query, scenario, results):
-        """
-        异步将研究结果保存到向量数据库，不阻塞主流程
-        
-        Args:
-            query: 用户查询
-            results: 研究结果
-        """
-        if not results:
-            return
-        if len(results) > self.vectordb_limit:
-            results = results[:self.vectordb_limit]
-        try:
-            self.crawler_manager.web_crawler.save_article(results, scenario)
-            logger.info(f"成功异步保存研究结果到向量数据库: query={query}, scenario={scenario}")
-        except Exception as e:
-            logger.error(f"异步保存到向量数据库时出错: {str(e)}", exc_info=True)
-            # 异步执行不能使用yield，只记录日志不影响主流程
 
     async def _evaluate_information_sufficiency(self, query, results):
         """

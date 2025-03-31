@@ -87,9 +87,8 @@ class MilvusDao:
         if self.embedding_generator:
             return self.embedding_generator(texts)
         else:
-            # 尝试导入项目中的embedding_manager作为后备
             try:
-                from ..embeddings.model_manager import embedding_manager
+                from src.model.embeddings.model_manager import embedding_manager
                 return embedding_manager.generate_embeddings(texts)
             except ImportError:
                 raise ValueError("未提供embedding_generator且无法导入默认的embedding_manager")
