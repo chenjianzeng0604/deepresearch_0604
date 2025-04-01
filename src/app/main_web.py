@@ -361,29 +361,20 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
                 chunk_type = chunk.get("type", "content")
                 chunk_phase = chunk.get("phase", "")
                 if chunk_type == "status":
-                    if chunk_phase == "queries":
-                        query_list = chunk.get("query_list", [])
-                        if query_list:
-                            query_display = "📑 思考扩展查询:\n\n" + "\n\n".join([f"• {q}" for q in query_list])
-                            yield f"event: status\ndata: {json.dumps({'content': query_display, 'phase': 'queries_summary'})}\n\n"
+                    if chunk_phase == "evaluate":
+                        result = chunk.get("result", "")
+                        if result:
+                            result_display = f"\n\n{result['thought']}"
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "research":
-                        platform = chunk.get("platform", "")
-                        query = chunk.get("query", "")
-                        result_display = f"🌐 正在从{platform}联网搜索'{query}'..."
-                        yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
-                    elif chunk_phase == "research_detail":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"\n\n• {result['url']}\n\n{result['title']}"
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "vector_search":
-                        scenario = chunk.get("scenario", "")
-                        result_display = f"🌐 正在从{scenario}知识库检索..."
-                        yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
-                    elif chunk_phase == "vector_search_detail":
                         result = chunk.get("result", "")
                         if result:
-                            result_display = f"\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
+                            result_display = f"🌐 从{scenario}知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
                     elif chunk_phase == "analysis_deep":
                         is_analysis_phase = True

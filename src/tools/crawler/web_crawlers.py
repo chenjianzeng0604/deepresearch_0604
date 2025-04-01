@@ -63,7 +63,7 @@ class WebCrawler:
         }
         self.crawler_extract_pdf_timeout = int(os.getenv("CRAWLER_EXTRACT_PDF_TIMEOUT", 30))
         self.crawler_max_links_result = int(os.getenv("CRAWLER_MAX_LINKS_RESULT", 10))
-        self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 60))
+        self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 30))
         self.crawler_fetch_article_with_semaphore = int(os.getenv("CRAWLER_FETCH_ARTICLE_WITH_SEMAPHORE", 10))
         self.crawler_fetch_url_max_retries = int(os.getenv("CRAWLER_FETCH_URL_MAX_RETRIES", 2))
         self.crawler_fetch_url_retry_delay = int(os.getenv("CRAWLER_FETCH_URL_RETRY_DELAY", 2))
@@ -330,10 +330,13 @@ class WebCrawler:
                     clean_content = content.strip() if content else ""
                     if not clean_content:
                         return {"url": link, "content": "", "title": ""}
-                    article_quality_prompt = PromptTemplates.format_article_quality_prompt(
+                    prompt = PromptTemplates.format_article_quality_prompt(
                         article=clean_content, word_count=self.article_trunc_word_count)
-                    logger.info(f"文章质量评估提示词: {article_quality_prompt}")
-                    response = await self.llm_client.generate(article_quality_prompt)
+                    logger.info(f"文章质量评估提示词: {prompt}")
+                    response = await self.llm_client.generate(
+                        prompt=prompt, 
+                        system_message=PromptTemplates.get_system_message()
+                    )
                     quality_result = str2Json(response)
                     logger.info(f"文章质量评估结果: {quality_result}")
                     if not quality_result or not quality_result.get("high_quality", False):
@@ -571,12 +574,10 @@ class WebCrawler:
             return None
             
         try:
-            logger.info(f"尝试不使用代理获取URL: {url}")
             return await self._fetch_url_implementation(url, useProxy=False)    
         except Exception as e:
             logger.error(f"不使用代理获取URL失败 {url}: {str(e)}")
             try:
-                logger.info(f"尝试使用代理获取URL: {url}")
                 return await self._fetch_url_implementation(url, useProxy=True)    
             except Exception as e:
                 logger.error(f"使用代理获取URL失败 {url}: {str(e)}")
@@ -679,12 +680,12 @@ class WebCrawler:
                             html = None
                     if html:
                         text = await page.inner_text("body")
-                        is_high_quality, score = quality_classifier.predict_quality(text)
+                        logger.info(f"获取到的文章内容: {text}")
+                        is_high_quality, score = quality_classifier.predict_quality(url, text)
                         if is_high_quality:
                             logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
                             return html
                         else:
-                            logger.warning(f"过滤低质量内容 (分数: {score:.2f}): {url}")
                             return None
                     else:
                         return None
@@ -850,18 +851,19 @@ class ContentQualityClassifier:
             text = text[:self.max_length]
         return text
     
-    def predict_quality(self, text):
+    def predict_quality(self, url, text):
         """
         预测内容质量
         
         Args:
+            url: 网页URL
             text: 网页内容文本
             
         Returns:
             tuple: (is_high_quality, score)
         """
         # 首先使用基本规则过滤
-        if self._rule_based_filter(text):
+        if self._rule_based_filter(url, text):
             return False, 0.0
         
         try:
@@ -869,34 +871,36 @@ class ContentQualityClassifier:
             result = self.classifier_cn(processed_text)
             quality_score = result['scores'][result['labels'].index("high")]
             is_high_quality = quality_score >= self.quality_threshold
-            logger.info(f"中文质量预测结果: {is_high_quality}, 分数: {quality_score}")
+            logger.info(f"{url}中文质检结果:{is_high_quality}, 分数:{quality_score}")
             if not is_high_quality:
                 result = self.classifier_en(processed_text)
                 quality_score = result['scores'][result['labels'].index("high")]
                 is_high_quality = quality_score >= self.quality_threshold
-                logger.info(f"英文质量预测结果: {is_high_quality}, 分数: {quality_score}")
+                logger.info(f"{url}英文质检结果:{is_high_quality}, 分数:{quality_score}")
             return is_high_quality, quality_score
         except Exception as e:
             logger.error(f"预测内容质量时出错: {str(e)}")
             return True, 0.5
     
-    def _rule_based_filter(self, text):
+    def _rule_based_filter(self, url, text):
         """基础规则过滤，检测明显的低质量内容"""
         if not text:
             return True
-            
         # 文本过短
         if len(text) < 150:
+            logger.info(f"{url}文本过短，过滤")
             return True
             
         # 规则1: 检测乱码（非中文/英文/数字/常用标点符号占比过高）
         non_valid_chars = re.findall(r'[^\u4e00-\u9fa5a-zA-Z0-9，。！？、,\.!?]', text)
         if len(non_valid_chars) / max(len(text), 1) > 0.3:  # 非有效字符超过30%
+            logger.info(f"{url}检测到乱码，过滤")
             return True
             
         # 规则2: 重复内容检测
         words = text.split()
-        if len(words) > 20 and len(set(words)) / max(len(words), 1) < 0.4:  # 词汇多样性过低
+        if len(words) > 20 and len(set(words)) / max(len(words), 1) < 0.1:  # 词汇多样性过低
+            logger.info(f"{url}检测到重复内容，过滤")
             return True
             
         # 规则3: 检测垃圾内容标志
@@ -908,6 +912,7 @@ class ContentQualityClassifier:
         ]
         lower_text = text.lower()
         if any(keyword in lower_text for keyword in keywords):
+            logger.info(f"{url}检测到垃圾内容，过滤")
             return True
 
         # 检测反爬验证页面
@@ -923,9 +928,8 @@ class ContentQualityClassifier:
         text_lower = text.lower()
         for pattern in captcha_patterns:
             if pattern.lower() in text_lower:
-                logger.info("检测到反爬验证页面，已过滤")
+                logger.info(f"{url}检测到反爬验证页面，过滤")
                 return True
-        
         return False
 
 quality_classifier = ContentQualityClassifier()

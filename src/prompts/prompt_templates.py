@@ -5,26 +5,6 @@
 PROMPT_TEMPLATES = {
     # 系统消息
     "DEFAULT_SYSTEM_MESSAGE": "You are a helpful assistant.",
-    "JSON_SYSTEM_MESSAGE": "You must respond with a valid JSON object that conforms to the provided schema.",
-    
-    # 搜索查询生成提示词
-    "SEARCH_QUERIES_TEMPLATE": """
-    作为智能研究助手，你的任务是根据用户原始查询生成最多{num}个不同的、精确的搜索查询，这些查询将有助于收集有关该主题的全面信息。
-
-    当前时间：{current_time}
-
-    原始查询: {query}
-
-    请以JSON数组格式返回查询语句(不要包含其他文本)，例如:
-    ["查询语句1", "查询语句2", "查询语句3"]
-
-    注意：
-    1. 保留用户原始查询，并放在第一个位置，也算入总数里
-    2. 与原始查询相关，但角度或焦点不同，不重复
-    3. 查询语句不能偏离用户核心需求，具备实际的讨论与跟进意义，避免华而不实
-    4. 查询语句具体而明确，适合搜索引擎使用
-    5. 查询语句不超过10个词
-    """,
     
     # 深度分析提示词
     "DEEP_ANALYSIS_TEMPLATE": """  
@@ -42,8 +22,8 @@ PROMPT_TEMPLATES = {
     """,
     
     # 信息充分性评估提示词
-    "INFORMATION_SUFFICIENCY_TEMPLATE": """
-    作为智能研究助手，你的任务是评估我们目前收集的信息是否足够回答用户的查询。
+    "EVALUATE_INFORMATION_TEMPLATE": """
+    作为智能研究助手，你的任务是评估我们目前收集的信息是否足够回答用户的查询，不够的话反思下一步如何收集信息解决用户的查询，给出包含搜索关键字的搜索URL，并且给出反思的思考过程和结论。
 
     当前时间：{current_time}
 
@@ -51,33 +31,13 @@ PROMPT_TEMPLATES = {
 
     已收集的信息:
     {context_text}
-
-    根据以上收集到的信息，判断是否已足够全面地回答用户查询。
-    如果信息已足够，请输出"SUFFICIENT"。
-    如果信息不足，请输出"INSUFFICIENT"，并简述还缺少哪些方面的信息。
-
-    你的评估:
-    """,
     
-    # 额外查询生成提示词
-    "ADDITIONAL_QUERIES_TEMPLATE": """
-    作为智能研究助手，你的任务是基于用户的原始查询和已收集的信息，生成{num}个新的搜索查询，以补充我们还缺少的信息。
+    以JSON格式输出：
+    1 enough字段：存放是否足够结果，足够值为True，不够值为False
+    2 search_url：进一步搜索URL，一个或多个的数组结构，保证搜索可用，实用主义
+    3 thought：反思的思考过程和结论，用自然语言方式输出方便用户阅读
 
-    当前时间：{current_time}
-
-    原始查询: {original_query}
-
-    已收集的信息:
-    {context_text}
-
-    分析上述信息后，我们还缺少哪些方面的信息？请生成{num}个新的搜索查询，以帮助我们获取更全面的信息。
-    这些查询应该：
-    1. 查询语句与原始查询相关，但角度或焦点不同
-    2. 查询语句具体而明确，适合搜索引擎使用
-    3. 查询语句能够填补已收集信息的空白
-    4. 查询语句不超过10个词
-
-    请直接列出查询，每行一个，不要有编号或其他说明。
+    你的评估与反思:
     """,
     
     # 意图识别提示词
@@ -116,29 +76,13 @@ from datetime import datetime
 class PromptTemplates:
     """提示词模板类，集中管理所有提示词"""
     @classmethod
-    def get_system_message(cls, for_json: bool = False) -> str:
+    def get_system_message(cls) -> str:
         """获取系统消息
         
-        Args:
-            for_json: 是否用于JSON输出
         Returns:
             str: 系统消息
         """
-        if for_json:
-            return PROMPT_TEMPLATES["JSON_SYSTEM_MESSAGE"]
         return PROMPT_TEMPLATES["DEFAULT_SYSTEM_MESSAGE"]
-    
-    @classmethod
-    def format_search_queries_prompt(cls, query: str, num: int=6) -> str:
-        """格式化搜索查询提示词
-        
-        Args:
-            query: 用户查询
-            num: 生成的查询数量
-        Returns:
-            str: 格式化后的提示词
-        """
-        return PROMPT_TEMPLATES["SEARCH_QUERIES_TEMPLATE"].format(query=query, num=num, current_time=datetime.now().strftime("%Y-%m-%d"))
     
     @classmethod
     def format_deep_analysis_prompt(cls, query: str, summaries: str, context: str = "") -> str:
@@ -159,7 +103,7 @@ class PromptTemplates:
         )
     
     @classmethod
-    def format_information_sufficiency_prompt(cls, query: str, context_text: str) -> str:
+    def format_evaluate_information_prompt(cls, query: str, context_text: str) -> str:
         """格式化信息充分性评估提示词
         
         Args:
@@ -168,25 +112,7 @@ class PromptTemplates:
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["INFORMATION_SUFFICIENCY_TEMPLATE"].format(query=query, context_text=context_text, current_time=datetime.now().strftime("%Y-%m-%d"))
-    
-    @classmethod
-    def format_additional_queries_prompt(cls, original_query: str, context_text: str, num: int=2) -> str:
-        """格式化额外查询生成提示词
-        
-        Args:
-            original_query: 原始查询
-            context_text: 已收集的信息文本
-            num: 生成的查询数量
-        Returns:
-            str: 格式化后的提示词
-        """
-        return PROMPT_TEMPLATES["ADDITIONAL_QUERIES_TEMPLATE"].format(
-            current_time=datetime.now().strftime("%Y-%m-%d"),
-            original_query=original_query, 
-            context_text=context_text, 
-            num=num
-        )
+        return PROMPT_TEMPLATES["EVALUATE_INFORMATION_TEMPLATE"].format(query=query, context_text=context_text, current_time=datetime.now().strftime("%Y-%m-%d"))
         
     @classmethod
     def format_intent_recognition_prompt(cls, query: str) -> str:

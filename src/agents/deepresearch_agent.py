@@ -292,120 +292,44 @@ class DeepresearchAgent:
         """
         query = message.message
         
-        # 识别意图
         intent = await self._recognize_intent(query)
-        
-        # 生成搜索查询
-        search_queries = await self._generate_search_queries(message)
-        yield {"type": "status", "phase": "queries", "query_list": search_queries}
         
         all_results = []
         iteration_count = 0
         while iteration_count < self.research_max_iterations:
-
-            yield {"type": "status", "phase": "vector_search", "scenario": intent}
-            all_contents = milvus_dao.search(
-                collection_name=self.crawler_config.get_collection_name(intent),
-                data=milvus_dao.generate_embeddings(search_queries),
-                limit=self.vectordb_limit,
-                output_fields=["url", "title", "content"],
-            )
-            unique_contents = {}
-            for query_contents in all_contents:
-                if not query_contents:
-                    continue
-                for contents in query_contents:
-                    entity = contents['entity']
-                    if isinstance(entity, dict) and 'content' in entity and entity['content'] and len(entity['content'].strip()) > 0 and 'url' in entity and entity['url'] not in unique_contents:
-                        unique_contents[entity['url']] = entity
-            result = list(unique_contents.values())
-            if result:
-                yield {"type": "status", "phase": "vector_search_detail", "result": result}
-                all_results.extend(result)
-
-            for query in search_queries:
-                if len(all_results) >= self.summary_limit:
+            try:
+                evaluate_result =await self._evaluate_information(query, all_results)
+                logger.info(f"{intent}场景解决{query}评估反思结果{evaluate_result}")
+                if evaluate_result and evaluate_result["enough"]:
                     break
-                try:
-                    url_formats = self.crawler_config.get_search_url_formats(intent)
-                    all_urls = set()
-
-                    for platform, url_format in url_formats.items():
-                        if len(all_results) >= self.summary_limit:
-                            break
-
-                        if 'arxiv' in platform:
-                            sub_urls = await self.crawler_manager.arxiv_crawler.parse_sub_url(query)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.arxiv_crawler.fetch_article_stream(sub_urls, intent):
-                                if result['content'] and len(result['content'].strip()) > 0:
-                                    all_results.append(result)
-                                    yield {
-                                        "type": "status", 
-                                        "result": result,
-                                        "phase": "research_detail"
-                                    }
-                        elif 'github' in platform:
-                            sub_urls = await self.crawler_manager.github_crawler.parse_sub_url(query)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.github_crawler.fetch_article_stream(sub_urls, intent):
-                                if result['content'] and len(result['content'].strip()) > 0:
-                                    all_results.append(result)
-                                    yield {
-                                        "type": "status", 
-                                        "result": result,
-                                        "phase": "research_detail"
-                                    }
-                        else:
-                            search_url = url_format.format(quote(query))
-                            sub_urls = await self.crawler_manager.web_crawler.parse_sub_url(search_url)
-                            sub_urls = [url for url in sub_urls if url not in all_urls]
-                            if not sub_urls:
-                                continue
-                            yield {
-                                "type": "status", 
-                                "query": query,
-                                "platform": platform,
-                                "phase": "research"
-                            }
-                            all_urls.update(sub_urls)
-                            async for result in self.crawler_manager.web_crawler.fetch_article_stream(sub_urls, intent):
-                                if result['content'] and len(result['content'].strip()) > 0:
-                                    all_results.append(result)
-                                    yield {
-                                        "type": "status", 
-                                        "result": result,
-                                        "phase": "research_detail"
-                                    }
-                except Exception as e:
-                    logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}", exc_info=True)
-
+                yield {
+                    "type": "status", 
+                    "result": evaluate_result,
+                    "phase": "evaluate"
+                }
+                search_url_list = evaluate_result["search_url"]
+                if search_url_list:
+                    for search_url in search_url_list:
+                        urls = await self.crawler_manager.web_crawler.parse_sub_url(search_url)
+                        if not urls:
+                            continue
+                        async for result in self.crawler_manager.web_crawler.fetch_article_stream(urls, intent):
+                            if len(all_results) < self.summary_limit:
+                                try:
+                                    if result['content'] and len(result['content'].strip()) > 0:
+                                        all_results.append(result)
+                                        yield {
+                                            "type": "status", 
+                                            "result": result,
+                                            "phase": "research"
+                                        }
+                                except Exception as e:
+                                    logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}")
+            except Exception as e:
+                logger.error(f"在{intent}场景解决{query}反思搜索迭代时出错: {str(e)}")
+            
             if len(all_results) >= self.summary_limit:
                 break
-            if await self._evaluate_information_sufficiency(query, all_results):
-                break
-            if iteration_count < self.research_max_iterations - 1:
-                additional_queries = await self._generate_additional_queries(query, all_results)
-                search_queries = additional_queries
-                yield {"type": "status", "phase": "queries", "query_list": search_queries}
             iteration_count += 1
         
         if len(all_results) > self.summary_limit:
@@ -413,7 +337,7 @@ class DeepresearchAgent:
         
         yield {"type": "research_results", "data": {"results": all_results}}
 
-    async def _evaluate_information_sufficiency(self, query, results):
+    async def _evaluate_information(self, query, results):
         """
         使用LLM评估已获取的信息是否足够回答用户查询
         
@@ -424,89 +348,24 @@ class DeepresearchAgent:
         Returns:
             bool: 信息是否足够
         """
-        if not results:
-            return False
-            
         context_text = ""
-        for i, result in enumerate(results):
-            if 'content' in result and result['content']:
-                snippet = result['content']
-                context_text += f"文档{i}: {snippet}...\n"
+        if results:
+            for i, result in enumerate(results):
+                if 'content' in result and result['content']:
+                    snippet = result['content']
+                    context_text += f"文档{i}: {snippet}...\n"
         
-        prompt = PromptTemplates.format_information_sufficiency_prompt(query, context_text)
+        prompt = PromptTemplates.format_evaluate_information_prompt(query, context_text)
         
         try:
-            response = await self.llm_client.generate(prompt)
-            if "SUFFICIENT" in response.strip().upper():
-                return True
-            return False
+            response = await self.llm_client.generate(
+                prompt=prompt, 
+                system_message=PromptTemplates.get_system_message()
+            )
+            return str2Json(response)
         except Exception as e:
             logger.error(f"评估信息充分性时出错: {str(e)}", exc_info=True)
-            return False
-
-    async def _generate_additional_queries(self, original_query, results):
-        """
-        基于已有结果生成额外的查询以补充信息
-        
-        Args:
-            original_query: 原始查询
-            results: 已获取的结果
-            
-        Returns:
-            list: 额外查询列表
-        """
-        if not results:
-            return [original_query]  # 如果没有结果，返回原始查询
-        
-        context_text = ""
-        for i, result in enumerate(results):
-            if 'content' in result and result['content']:
-                snippet = result['content']
-                context_text += f"文档{i}: {snippet}...\n\n"
-        
-        prompt = PromptTemplates.format_additional_queries_prompt(original_query, context_text, self.generate_query_num)
-        
-        try:
-            response = await self.llm_client.generate(prompt)
-            queries = [q.strip() for q in response.strip().split("\n") if q.strip()]
-            valid_queries = [q for q in queries if len(q.split()) <= 10 and q != original_query][:self.generate_query_num]
-            if not valid_queries:
-                default_queries = [
-                    f"{original_query} 最新进展",
-                    f"{original_query} 案例分析",
-                    f"{original_query} 挑战与机遇"
-                ]
-                return default_queries
-            return valid_queries
-        except Exception as e:
-            logger.error(f"生成额外查询时出错: {str(e)}", exc_info=True)
-            return [
-                f"{original_query} 最新研究",
-                f"{original_query} 应用案例"
-            ]
-
-    async def _generate_search_queries(self, message: ChatMessage) -> List[str]:
-        """
-        生成搜索查询语句
-        
-        Args:
-            message: 用户消息
-        Returns:
-            List[str]: 搜索查询语句列表
-        """
-        prompt = PromptTemplates.format_search_queries_prompt(message.message, self.generate_query_num)
-        
-        try:
-            response = await self.llm_client.generate(prompt)
-            queries = str2Json(response)
-            if isinstance(queries, list):
-                return queries
-            else:
-                logger.warning(f"搜索查询生成格式错误: {response}")
-                return [message.message]
-        except Exception as e:
-            logger.error(f"生成搜索查询时出错: {e}", exc_info=True)
-            return [message.message]
+            return {}
 
     async def _recognize_intent(self, query: str) -> str:
         """
