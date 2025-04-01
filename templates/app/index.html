@@ -353,24 +353,6 @@
         .assistant-message:not(.collapsed) .toggle-collapse i {
             transform: rotate(180deg);
         }
-        
-        /* 预览文本样式（收缩状态下显示） */
-        .preview-text {
-            position: absolute;
-            bottom: 30px;
-            left: 16px;
-            right: 40px;
-            font-size: 13px;
-            color: #666;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            display: none;
-        }
-        
-        .assistant-message.collapsed .preview-text {
-            display: block;
-        }
 
         /* 全屏欢迎消息样式 - 放置在顶部 */
         .welcome-message {
@@ -756,11 +738,6 @@
                 top: 5px;
             }
             
-            .preview-text {
-                right: 90px;
-                font-size: 0.8rem;
-            }
-            
             .chat-input {
                 padding: 8px;
             }
@@ -791,11 +768,6 @@
             
             .assistant-message {
                 font-size: 13px;
-            }
-            
-            .preview-text {
-                font-size: 0.75rem;
-                top: 8px;
             }
             
             .chat-input textarea {
@@ -835,11 +807,6 @@
                 padding: 3px 8px;
                 right: 5px;
                 top: 5px;
-            }
-            
-            .preview-text {
-                right: 90px;
-                font-size: 0.8rem;
             }
             
             .chat-input {
@@ -1237,7 +1204,7 @@
             margin-bottom: 8px;
             font-size: 18px;
             color: #333;
-            border-bottom: 1px solid #eaeaea;
+            border-bottom: 1px solid #eaecea;
             padding-bottom: 6px;
         }
 
@@ -1272,6 +1239,57 @@
             margin-bottom: 8px;
             font-size: 15px;
             font-weight: 500;
+        }
+        
+        /* 深度总结容器样式 */
+        .deep-analysis-container {
+            display: block;
+            background-color: #f8f9fa;
+            border-left: 3px solid #2980b9;
+            padding: 10px 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+        }
+
+        /* 状态消息容器样式 */
+        .status-wrapper {
+            position: relative;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-left: 3px solid #6c757d;
+        }
+        
+        .status-collapse-button {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px;
+            z-index: 2;
+        }
+        
+        .status-container {
+            padding-left: 20px;
+            transition: max-height 0.3s ease;
+            overflow: hidden;
+        }
+        
+        .status-container.collapsed {
+            max-height: 30px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* 消息内容容器 */
+        .message-markdown-container {
+            padding: 5px 0;
         }
     </style>
 </head>
@@ -1531,17 +1549,8 @@
                     updateChatTitle(sessionTitle);
                     // 添加历史消息
                     data.messages.forEach(msg => {
-                        const messageElement = document.createElement('div');
-                        messageElement.className = `message ${msg.role}-message`;
-                        
-                        if (msg.role === 'user') {
-                            messageElement.textContent = msg.content;
-                        } else {
-                            // 使用marked解析markdown
-                            messageElement.innerHTML = marked.parse(msg.content);
-                        }
-                        
-                        messagesContainer.appendChild(messageElement);
+                        // 使用addMessage函数来确保一致的消息结构
+                        addMessage(msg.content, msg.role, false);
                     });
                     // 滚动到底部
                     messagesContainer.scrollTo({
@@ -1586,6 +1595,7 @@
             console.log('添加消息:', content, role, isStreaming);
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}-message`;
+            
             if (role === 'assistant' && !isStreaming) {
                 // 默认助手消息为收缩状态，除非是流式消息
                 messageDiv.classList.add('collapsed');
@@ -1604,6 +1614,7 @@
             if (role === 'user') {
                 // 用户消息直接显示文本
                 contentDiv.textContent = content;
+                messageDiv.appendChild(contentDiv);
             } else {
                 // 助手消息支持Markdown渲染
                 try {
@@ -1634,13 +1645,6 @@
                     console.error('Markdown解析错误:', e);
                     contentDiv.textContent = content;
                 }
-                
-                // 如果消息被折叠，也更新预览文本
-                const previewText = document.createElement('div');
-                previewText.className = 'preview-text';
-                // 提取最后一段文本用于预览
-                const lastParagraph = getLastParagraph(content);
-                previewText.textContent = lastParagraph;
                 // 添加展开/收缩按钮
                 const toggleButton = document.createElement('button');
                 toggleButton.className = 'toggle-collapse';
@@ -1648,11 +1652,10 @@
                 toggleButton.addEventListener('click', function() {
                     messageDiv.classList.toggle('collapsed');
                 });
-                messageDiv.appendChild(previewText);
+                messageDiv.appendChild(contentDiv);
                 messageDiv.appendChild(toggleButton);
             }
             // 组装消息
-            messageDiv.appendChild(contentDiv);
             messageDiv.appendChild(timestamp);
             // 添加到消息容器
             messagesContainer.appendChild(messageDiv);
@@ -1782,22 +1785,18 @@
                 assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
                 isFirstChunk = false;
             });
-            
             eventSource.addEventListener('status', function(event) {
                 console.log('收到状态事件:', event.data);
                 handleSSEMessage(event.data, assistantContent, isFirstChunk);
             });
-            
             eventSource.addEventListener('sources', function(event) {
                 console.log('收到来源事件:', event.data);
                 handleSSEMessage(event.data, assistantContent, isFirstChunk);
             });
-            
             eventSource.addEventListener('error', function(event) {
                 console.log('收到错误事件:', event.data);
                 handleSSEMessage(event.data, assistantContent, isFirstChunk);
             });
-            
             eventSource.addEventListener('complete', function(event) {
                 console.log('收到完成事件:', event.data);
                 handleSSEMessage(event.data, assistantContent, isFirstChunk);
@@ -1805,14 +1804,11 @@
                 eventSource = null;
                 enableUserInput();
             });
-            
-            // 默认消息处理
             eventSource.onmessage = function(event) {
                 console.log('收到默认消息:', event.data);
                 assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
                 isFirstChunk = false;
             };
-            
             // 监听错误事件
             eventSource.onerror = function(error) {
                 console.error('SSE连接错误:', error);
@@ -1834,51 +1830,58 @@
                     if (contentDiv) {
                         if (jsonData.content) {
                             // 检查是否是思考过程或最终总结
-                            const sectionType = jsonData.section_type || '';
+                            const type = jsonData.type || '';
                             const contentText = jsonData.content || '';
-                            const currentDivContent = contentDiv.innerHTML || '';
-                            contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
-                            console.log('contentText:' + contentText);
-                            
-                            // 处理代码块的语法高亮
-                            contentDiv.querySelectorAll('pre code').forEach((block) => {
-                                if (!block.classList.contains('hljs')) {
-                                    hljs.highlightElement(block);
-                                    
-                                    // 获取代码块的父元素
-                                    const preBlock = block.parentElement;
-                                    if (preBlock) {
-                                        // 检测语言类
-                                        const classes = block.className.split(' ');
-                                        let language = 'text';
-                                        
-                                        for (const cls of classes) {
-                                            if (cls.startsWith('language-')) {
-                                                language = cls.replace('language-', '');
-                                                break;
-                                            }
-                                        }
-                                        
-                                        // 添加语言标记
-                                        preBlock.setAttribute('data-language', language);
-                                    }
+                            const currentPhase = jsonData.phase || '';
+                            console.log(jsonData);
+                            // 根据消息类型不同处理
+                            if (type === 'content') {
+                                // 纯markdown内容使用专门的容器
+                                let msgContainer = contentDiv.querySelector('.message-markdown-container');
+                                if (!msgContainer) {
+                                    msgContainer = document.createElement('div');
+                                    msgContainer.className = 'message-markdown-container markdown-content';
+                                    contentDiv.appendChild(msgContainer);
                                 }
-                            });
-                            
-                            // 如果消息被折叠，也更新预览文本
-                            const previewText = currentAssistantMessage.querySelector('.preview-text');
-                            if (previewText) {
-                                // 获取最后一段文本用于预览
-                                const lastParagraph = getLastParagraph(jsonData.content || '');
-                                previewText.textContent = lastParagraph;
-                            }
-                            
-                            // 如果不是收缩状态，自动滚动到底部
-                            if (!currentAssistantMessage.classList.contains('collapsed')) {
-                                messagesContainer.scrollTo({
-                                    top: messagesContainer.scrollHeight,
-                                    behavior: 'smooth'
-                                });
+                                msgContainer.innerHTML = marked.parse(contentText);
+                            } else if (type === 'research_process') {
+                                // 状态消息使用可折叠容器
+                                let statusWrapper = contentDiv.querySelector(`.status-phase-${currentPhase}`);
+                                let statusContainer;
+                                
+                                if (!statusWrapper) {
+                                    // 创建状态容器及折叠按钮
+                                    statusWrapper = document.createElement('div');
+                                    statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
+                                    
+                                    // 添加折叠按钮
+                                    const collapseButton = document.createElement('button');
+                                    collapseButton.className = 'status-collapse-button';
+                                    collapseButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                                    
+                                    statusContainer = document.createElement('div');
+                                    statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
+                                    
+                                    // 添加点击折叠功能
+                                    collapseButton.addEventListener('click', function() {
+                                        statusContainer.classList.toggle('collapsed');
+                                        this.classList.toggle('collapsed');
+                                    });
+                                    
+                                    statusWrapper.appendChild(collapseButton);
+                                    statusWrapper.appendChild(statusContainer);
+                                    contentDiv.appendChild(statusWrapper);
+                                } else {
+                                    statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
+                                }
+                                
+                                if (statusContainer) {
+                                    statusContainer.innerHTML = marked.parse(contentText);
+                                }
+                            } else {
+                                // 使用默认内容区域
+                                const currentDivContent = contentDiv.innerHTML || '';
+                                contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
                             }
                         }
                     }
@@ -1903,98 +1906,11 @@
             } catch (e) {
                 console.error('解析SSE消息失败:', e, data);
                 
-                // 如果不是JSON，假设是纯文本消息
-                if (currentAssistantMessage) {
-                    const contentDiv = currentAssistantMessage.querySelector('.message-content');
-                    if (contentDiv) {
-                        if (jsonData.content) {
-                            // 检查是否是思考过程或最终总结
-                            const sectionType = jsonData.section_type || '';
-                            const contentText = jsonData.content || '';
-                            
-                            // 特殊处理思考开始标记
-                            if (jsonData.type === 'thought_start') {
-                                // 直接使用markdown渲染详情标签
-                                contentDiv.innerHTML += marked.parse(contentText);
-                            } 
-                            // 特殊处理思考结束标记
-                            else if (jsonData.type === 'thought_end') {
-                                contentDiv.innerHTML += marked.parse(contentText);
-                            }
-                            // 特殊处理模型思考开始标记
-                            else if (jsonData.type === 'model_thinking_start') {
-                                contentDiv.innerHTML += marked.parse(contentText);
-                            }
-                            // 特殊处理模型思考结束标记
-                            else if (jsonData.type === 'model_thinking_end') {
-                                contentDiv.innerHTML += marked.parse(contentText);
-                            }
-                            // 特殊处理最终答案结束标记
-                            else if (jsonData.type === 'final_answer_end') {
-                                contentDiv.innerHTML += marked.parse(contentText);
-                            }
-                            // 普通内容添加
-                            else {
-                                // 旧内容
-                                const currentDivContent = contentDiv.innerHTML || '';
-                                // 追加新内容并用Markdown渲染
-                                contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
-                            }
-                            
-                            // 处理代码块的语法高亮
-                            contentDiv.querySelectorAll('pre code').forEach((block) => {
-                                if (!block.classList.contains('hljs')) {
-                                    hljs.highlightElement(block);
-                                    
-                                    // 获取代码块的父元素
-                                    const preBlock = block.parentElement;
-                                    if (preBlock) {
-                                        // 检测语言类
-                                        const classes = block.className.split(' ');
-                                        let language = 'text';
-                                        
-                                        for (const cls of classes) {
-                                            if (cls.startsWith('language-')) {
-                                                language = cls.replace('language-', '');
-                                                break;
-                                            }
-                                        }
-                                        
-                                        // 添加语言标记
-                                        preBlock.setAttribute('data-language', language);
-                                    }
-                                }
-                            });
-                            
-                            // 如果消息被折叠，也更新预览文本
-                            const previewText = currentAssistantMessage.querySelector('.preview-text');
-                            if (previewText) {
-                                // 获取最后一段文本用于预览
-                                const lastParagraph = getLastParagraph(jsonData.content || '');
-                                previewText.textContent = lastParagraph;
-                            }
-                            
-                            // 如果不是收缩状态，自动滚动到底部
-                            if (!currentAssistantMessage.classList.contains('collapsed')) {
-                                messagesContainer.scrollTo({
-                                    top: messagesContainer.scrollHeight,
-                                    behavior: 'smooth'
-                                });
-                            }
-                        }
-                    }
-                }
-                
                 // 自动滚动到底部
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 
-                return jsonData.content || currentContent;
+                return currentContent;
             }
-            
-            // 自动滚动到底部
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            return jsonData.content || currentContent;
         }
         
         // 处理SSE错误
@@ -2012,39 +1928,6 @@
             
             // 恢复输入状态
             enableUserInput();
-        }
-        
-        // 从Markdown文本中提取最后一段有意义的文本作为预览
-        function getLastParagraph(markdown) {
-            // 移除代码块
-            const withoutCodeBlocks = markdown.replace(/```[\s\S]*?```/g, '');
-            
-            // 按段落分割
-            const paragraphs = withoutCodeBlocks.split('\n\n');
-            
-            // 过滤掉空段落和只包含特殊字符的段落
-            const validParagraphs = paragraphs.filter(p => {
-                const trimmed = p.trim();
-                return trimmed.length > 0 && !/^[#*\-_]+$/.test(trimmed);
-            });
-            
-            // 获取最后一段，如果没有有效段落则返回一个默认值
-            const lastParagraph = validParagraphs[validParagraphs.length - 1] || '正在思考...';
-            
-            // 清理Markdown标记并截断长度
-            return cleanMarkdown(lastParagraph).substring(0, 100) + (lastParagraph.length > 100 ? '...' : '');
-        }
-        
-        // 清理Markdown格式
-        function cleanMarkdown(text) {
-            return text
-                .replace(/#{1,6}\s+/g, '') // 移除标题
-                .replace(/\*\*(.*?)\*\*/g, '$1') // 移除粗体
-                .replace(/\*(.*?)\*/g, '$1') // 移除斜体
-                .replace(/\[(.*?)\]\(.*?\)/g, '$1') // 简化链接
-                .replace(/`(.*?)`/g, '$1') // 移除内联代码
-                .replace(/\n/g, ' ') // 将换行替换为空格
-                .trim();
         }
         
         // 初始化时预加载历史会话数据

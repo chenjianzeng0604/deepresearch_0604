@@ -59,7 +59,9 @@ class LLMClient:
     async def generate(self, prompt: str, max_tokens: Optional[int] = None, 
                      temperature: Optional[float] = None, 
                      tools: Optional[List[Dict[str, Any]]] = None,
-                     system_message: Optional[str] = None) -> str:
+                     system_message: Optional[str] = None,
+                     model: Optional[str] = None,
+                     use_tool_model: Optional[str] = None) -> str:
         """
         生成文本
         
@@ -87,12 +89,17 @@ class LLMClient:
         # 重试机制
         max_retries = 2
         retry_delay = 2  # 初始等待时间（秒）
+
+        if not model:
+            model = self.model
+        if not use_tool_model:
+            use_tool_model = self.use_tool_model
         
         for attempt in range(max_retries):
             try:
                 # 参数设置
                 params = {
-                    "model": self.model,
+                    "model": model,
                     "messages": messages,
                     "temperature": temperature if temperature is not None else self.temperature,
                     "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
@@ -100,7 +107,7 @@ class LLMClient:
                 
                 # 如果有工具配置，添加到参数中，并且设置支持工具调用的模型
                 if tools:
-                    params["model"] = self.use_tool_model
+                    params["model"] = use_tool_model
                     params["tools"] = tools
                 
                 # 检查是否是DashScope API，并添加流式参数

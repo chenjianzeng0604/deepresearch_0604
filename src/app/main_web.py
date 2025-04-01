@@ -348,8 +348,6 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
     try:
         # 发送初始状态更新
         yield f"event: status\ndata: {json.dumps({'content': '开始处理您的请求...', 'phase': 'init'})}\n\n"
-        # 处理流式响应
-        is_analysis_phase = False  # 标记是否进入深度分析阶段
         
         async for chunk in agent.process_stream(ChatMessage(message=message, platforms=platforms)):
             # 检查流是否已被客户端中止
@@ -360,56 +358,25 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
             if isinstance(chunk, dict):
                 chunk_type = chunk.get("type", "content")
                 chunk_phase = chunk.get("phase", "")
-                if chunk_type == "status":
+                if chunk_type == "research_process":
                     if chunk_phase == "evaluate":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"\n\n{result['thought']}"
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
-                    elif chunk_phase == "research":
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
+                    elif chunk_phase == "web_search":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"\n\n• {result['url']}\n\n{result['title']}"
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
                     elif chunk_phase == "vector_search":
                         result = chunk.get("result", "")
                         if result:
-                            result_display = f"🌐 从{scenario}知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': 'research_progress'})}\n\n"
-                    elif chunk_phase == "analysis_deep":
-                        is_analysis_phase = True
-                        yield f"event: status\ndata: {json.dumps({'content': '🧠 最终答案', 'phase': 'analysis_deep'})}\n\n"
-                    else:
-                        # 其他状态信息正常传递
-                        yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
-                # 添加请求ID并发送
+                            result_display = f"从知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
+                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
                 if chunk_type == "content":
-                    # 内容消息需要标记其类型，便于前端识别思考过程和最终总结
-                    if not "type" in chunk:
-                        if is_analysis_phase:
-                            chunk["section_type"] = "thought_process"
-                        else:
-                            chunk["section_type"] = "final_answer"
                     chunk["request_id"] = str(uuid.uuid4())
-                    yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
-                elif chunk_type not in ["status"]:  # 状态消息已经特殊处理过
-                    chunk["request_id"] = str(uuid.uuid4())
-                    yield f"event: {chunk_type}\ndata: {json.dumps(chunk)}\n\n"
-            else:
-                # 字符串直接作为内容发送
-                section_type = "thought_process" if is_analysis_phase else "final_answer"
-                content_chunk = {
-                    "type": "content",
-                    "content": chunk,
-                    "section_type": section_type,
-                    "request_id": str(uuid.uuid4())
-                }
-                full_response += chunk
-                yield f"event: content\ndata: {json.dumps(content_chunk)}\n\n"
-        
-        # 在最后添加最终结论的结束标签
-        final_answer_end = "\n</div>\n"
-        yield f"event: content\ndata: {json.dumps({'content': final_answer_end, 'type': 'final_answer_end', 'request_id': str(uuid.uuid4())})}\n\n"
+                    yield f"event: message\ndata: {json.dumps(chunk)}\n\n"
         
         # 保存助手回复到历史
         if full_response:

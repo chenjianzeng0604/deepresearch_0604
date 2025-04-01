@@ -106,22 +106,20 @@ class DeepresearchAgent:
             self.memory_manager.save_chat_history(self.session_id, chat_history)
         
         try:
-            # 使用带进度更新的研究方法
             research_results = {"results": []}
-            async for chunk in self._research_with_progress(message):
+            async for chunk in self._research(message):
                 if isinstance(chunk, dict) and chunk.get("type") == "research_results":
-                    research_results = chunk.get("data", {"results": []})
+                    research_results = chunk.get("result", {"results": []})
                 else:
                     yield chunk
             
-            # 生成流式响应
             response_content = ""
-            async for chunk in self._generate_response_stream(message, research_results):
+            async for chunk in self._deep_summary(message, research_results):
                 if isinstance(chunk, dict):
                     yield chunk
                 else:
                     response_content += chunk
-                    yield {"type": "content", "content": chunk}
+                    yield {"type": "content", "content": chunk, "phase": "deep_summary"}
             
             # 保存助手响应到数据库
             if self.message_manager and response_content:
@@ -139,13 +137,12 @@ class DeepresearchAgent:
                 if len(chat_history) >= self.memory_threshold:
                     await self._generate_long_term_memory()
             
-            # 处理完成
             yield {"type": "status", "content": "处理完成", "phase": "complete"}
         except Exception as e:
             logger.error(f"处理流时出错: {str(e)}", exc_info=True)
             yield {"type": "error", "content": f"处理您的查询时出错: {str(e)}"}
 
-    async def _generate_response_stream(self, message, research_results):
+    async def _deep_summary(self, message, research_results):
         """
         生成流式响应
         
@@ -158,84 +155,72 @@ class DeepresearchAgent:
         """
         query = message.message
         
-        try:
-            results = research_results.get("results", [])
-            
-            # 获取历史对话
+        all_results = []
+        for result in research_results.get("results", []):
+            if 'content' in result and result['content']:
+                all_results.append(result)
+        
+        if all_results:
             chat_history = await self._get_conversation_history()
-            
-            if results:
-                all_summaries = []
-                for result in results:
-                    if 'content' in result and result['content']:
-                        all_summaries.append(result['content'])
-                
-                if all_summaries:
-                    yield {"type": "status", "content": "正在生成思考与分析...", "phase": "analysis_deep"}
-                    
-                    analysis_context = {
-                        "chat_history": chat_history,
-                        "query": query,
-                        "summaries": '\n'.join(all_summaries)
-                    }
-                    deep_analysis_prompt = PromptTemplates.format_deep_analysis_prompt(
-                        query, 
-                        '\n'.join(all_summaries),
-                        context=json.dumps(analysis_context) if chat_history else ""
-                    )
-                    
-                    max_retries = 3
-                    retry_count = 0
-                    while retry_count < max_retries:
-                        try:
-                            buffer = ""  # 用于缓冲少量token，以获得更流畅的体验
-                            buffer_limit = 10  # 缓冲更多token后再发送，减少请求频率
-                            async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
-                                buffer += chunk
-                                if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
-                                    yield {"type": "content", "content": buffer}
-                                    buffer = ""
-                            if buffer:
-                                yield {"type": "content", "content": buffer}
-                            break
-                        except Exception as e:
-                            retry_count += 1
-                            if retry_count < max_retries:
-                                logger.warning(f"流式连接出错，正在进行第{retry_count}次重试: {str(e)}")
-                                yield {"type": "status", "content": f"连接出错，正在重试({retry_count}/{max_retries})...", "phase": "retry"}
-                                await asyncio.sleep(1)  # 等待1秒后重试
-                            else:
-                                logger.error(f"流式连接最终失败: {str(e)}")
-                                yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
-                                raise
-                else:
-                    yield {"type": "status", "content": "无法生成深度分析，未找到有效内容", "phase": "analysis_error"}
-                    yield {"type": "content", "content": "抱歉，我发现了一些相关信息，但无法生成有效的深度分析。请尝试使用更具体的查询。"}
-            else:
-                # 如果没有找到研究结果，仅使用历史对话回复
-                yield {"type": "status", "content": "未找到相关信息，基于历史对话生成回复", "phase": "chat_response"}
-                prompt = f"用户当前问题: {query}\n\n"
-                if chat_history:
-                    prompt += "请基于以下历史对话回答用户的问题:\n\n"
-                    for msg in chat_history:
-                        role = "用户" if msg.get("role") == "user" else "助手"
-                        prompt += f"{role}: {msg.get('content', '')}\n\n"
+            analysis_context = {
+                "chat_history": chat_history,
+                "query": query,
+                "summaries": '\n'.join([result['content'] for result in all_results])
+            }
+            deep_analysis_prompt = PromptTemplates.format_deep_analysis_prompt(
+                query, 
+                '\n'.join([result['content'] for result in all_results]),
+                context=json.dumps(analysis_context) if chat_history else ""
+            )
+            max_retries = 3
+            retry_count = 0
+            while retry_count < max_retries:
                 try:
-                    buffer = ""
-                    buffer_limit = 10
-                    async for chunk in self.llm_client.generate_with_streaming(prompt):
+                    buffer = ""  # 用于缓冲少量token，以获得更流畅的体验
+                    buffer_limit = 10  # 缓冲更多token后再发送，减少请求频率
+                    async for chunk in self.llm_client.generate_with_streaming(deep_analysis_prompt):
                         buffer += chunk
                         if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
-                            yield {"type": "content", "content": buffer}
+                            yield {"type": "content", "content": buffer, "phase": "深度总结"}
                             buffer = ""
                     if buffer:
-                        yield {"type": "content", "content": buffer}
+                        yield {"type": "content", "content": buffer, "phase": "深度总结"}
+                    break
                 except Exception as e:
-                    logger.error(f"流式连接最终失败: {str(e)}")
-                    yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        logger.warning(f"流式连接出错，正在进行第{retry_count}次重试: {str(e)}")
+                        yield {"type": "status", "content": f"连接出错，正在重试({retry_count}/{max_retries})...", "phase": "retry"}
+                        await asyncio.sleep(1)  # 等待1秒后重试
+                    else:
+                        logger.error(f"流式连接最终失败: {str(e)}")
+                        yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
+                        raise
+        else:
+            yield {"type": "status", "content": "无法生成深度分析，未找到有效内容", "phase": "analysis_error"}
+            yield {"type": "content", "content": "抱歉，我发现了一些相关信息，但无法生成有效的深度分析。请尝试使用更具体的查询。"}
+        
+        # 如果没有找到研究结果，仅使用历史对话回复
+        yield {"type": "status", "content": "未找到相关信息，基于历史对话生成回复", "phase": "chat_response"}
+        prompt = f"用户当前问题: {query}\n\n"
+        if chat_history:
+            prompt += "请基于以下历史对话回答用户的问题:\n\n"
+            for msg in chat_history:
+                role = "用户" if msg.get("role") == "user" else "助手"
+                prompt += f"{role}: {msg.get('content', '')}\n\n"
+        try:
+            buffer = ""
+            buffer_limit = 10
+            async for chunk in self.llm_client.generate_with_streaming(prompt):
+                buffer += chunk
+                if len(buffer) >= buffer_limit or '\n' in buffer or '。' in buffer:
+                    yield {"type": "content", "content": buffer}
+                    buffer = ""
+            if buffer:
+                yield {"type": "content", "content": buffer}
         except Exception as e:
-            logger.error(f"生成响应时出错: {str(e)}", exc_info=True)
-            yield {"type": "error", "content": f"生成响应时出错: {str(e)}"}
+            logger.error(f"流式连接最终失败: {str(e)}")
+            yield {"type": "error", "content": f"连接失败，请稍后重试: {str(e)}"}
 
     async def _get_conversation_history(self) -> List[Dict[str, str]]:
         """
@@ -280,9 +265,9 @@ class DeepresearchAgent:
         except Exception as e:
             logger.error(f"生成长期记忆时出错: {str(e)}")
 
-    async def _research_with_progress(self, message):
+    async def _research(self, message):
         """
-        带有进度更新的研究方法，在研究的每个阶段发送进度更新
+        研究方法
         
         Args:
             message: 用户查询ChatMessage对象
@@ -293,6 +278,7 @@ class DeepresearchAgent:
         query = message.message
         
         intent = await self._recognize_intent(query)
+        logger.info(f"识别{query}的查询意图是:{intent}")
         
         all_results = []
         iteration_count = 0
@@ -303,7 +289,7 @@ class DeepresearchAgent:
                 if evaluate_result and evaluate_result["enough"]:
                     break
                 yield {
-                    "type": "status", 
+                    "type": "research_process", 
                     "result": evaluate_result,
                     "phase": "evaluate"
                 }
@@ -319,9 +305,9 @@ class DeepresearchAgent:
                                     if result['content'] and len(result['content'].strip()) > 0:
                                         all_results.append(result)
                                         yield {
-                                            "type": "status", 
+                                            "type": "research_process", 
                                             "result": result,
-                                            "phase": "research"
+                                            "phase": "web_search"
                                         }
                                 except Exception as e:
                                     logger.error(f"在{intent}场景搜索{query}时出错: {str(e)}")
@@ -335,7 +321,7 @@ class DeepresearchAgent:
         if len(all_results) > self.summary_limit:
             all_results = all_results[:self.summary_limit]
         
-        yield {"type": "research_results", "data": {"results": all_results}}
+        yield {"type": "research_results", "result": {"results": all_results}}
 
     async def _evaluate_information(self, query, results):
         """
@@ -360,7 +346,8 @@ class DeepresearchAgent:
         try:
             response = await self.llm_client.generate(
                 prompt=prompt, 
-                system_message=PromptTemplates.get_system_message()
+                system_message=PromptTemplates.get_system_message(),
+                model=os.getenv("EVALUATE_INFORMATION_MODEL")
             )
             return str2Json(response)
         except Exception as e:
@@ -378,11 +365,11 @@ class DeepresearchAgent:
             str: 识别的场景名称
         """
         try:
-            logger.info(f"识别查询意图: {query}")
             prompt = PromptTemplates.format_intent_recognition_prompt(query)
             response = await self.llm_client.generate(
                 prompt=prompt,
-                system_message=PromptTemplates.get_system_message()
+                system_message=PromptTemplates.get_system_message(),
+                model=os.getenv("INTENT_RECOGNITION_MODEL")
             )
             return response.strip().lower()
         except Exception as e:

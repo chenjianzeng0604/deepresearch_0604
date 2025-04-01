@@ -335,7 +335,8 @@ class WebCrawler:
                     logger.info(f"文章质量评估提示词: {prompt}")
                     response = await self.llm_client.generate(
                         prompt=prompt, 
-                        system_message=PromptTemplates.get_system_message()
+                        system_message=PromptTemplates.get_system_message(),
+                        model=os.getenv("ARTICLE_QUALITY_MODEL")
                     )
                     quality_result = str2Json(response)
                     logger.info(f"文章质量评估结果: {quality_result}")
@@ -908,7 +909,7 @@ class ContentQualityClassifier:
             'click here', 'buy now', 'limited offer', 'free download',
             'make money', 'earn cash', '点击这里', '立即购买', '限时优惠',
             "免费领取", "限时优惠", "点击下载", "立即注册", 
-            "v信", "加微", "低价出售", "【广告】"
+            "v信", "加微", "低价出售", "【广告】", "completed our registration form"
         ]
         lower_text = text.lower()
         if any(keyword in lower_text for keyword in keywords):
@@ -1258,4 +1259,3 @@ class CrawlerManager:
         self.github_crawler = GithubCrawler()
         self.web_crawler = WebCrawler()
         self.wechat_crawler = WeChatOfficialAccountCrawler()
-        
