@@ -1,17 +1,7 @@
 from functools import wraps
-from flask import session, redirect, url_for, render_template, request, flash
+from flask import request, flash
 
-def login_required(f):
-    """
-    检查用户是否已登录的装饰器
-    """
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'admin_logged_in' not in session or not session['admin_logged_in']:
-            return redirect(url_for('admin.login', next=request.url))
-        return f(*args, **kwargs)
-    return decorated_function
-
+# 移除login_required装饰器，因为已删除管理后台
 
 def db_required(get_config_manager_func):
     """

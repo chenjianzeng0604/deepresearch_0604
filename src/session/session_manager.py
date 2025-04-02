@@ -140,5 +140,35 @@ class SessionManager(MySQLBase):
         except Exception as e:
             logger.error(f"删除会话失败: {str(e)}")
             return False
+            
+    def update_session(self, session_id: str, title: str = None) -> bool:
+        """
+        更新会话信息，包括最后修改时间
+        
+        Args:
+            session_id: 会话ID
+            title: 会话标题，如果不指定则不更新
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            sql = "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP"
+            params = []
+            
+            if title:
+                sql += ", title = %s"
+                params.append(title)
+                
+            sql += " WHERE id = %s"
+            params.append(session_id)
+            
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql, tuple(params))
+            self.connection.commit()
+            return True
+        except Exception as e:
+            logger.error(f"更新会话信息失败: {str(e)}")
+            return False
 
 session_manager = SessionManager()

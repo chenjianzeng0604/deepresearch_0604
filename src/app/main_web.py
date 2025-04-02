@@ -36,7 +36,7 @@ from src.app.client_user_manager import client_auth_router, initialize_client_us
 from src.database.mysql.schemas.chat_schema import CHAT_SCHEMA, init_chat_default_data
 from src.database.mysql.mysql_base import MySQLBase
 from src.utils.log_utils import setup_logging
-from src.admin.crawler_config_manager import crawler_config_manager
+from src.tools.crawler.crawler_config import crawler_config_manager
 
 # 加载环境变量
 load_dotenv()
@@ -163,31 +163,46 @@ async def get_chat_history(request: Request):
     
     user_id = user["user_id"]
     
-    # 筛选当前用户的会话
-    user_sessions = {
-        session_id: session_data 
-        for session_id, session_data in chat_history.items()
-        if session_data.get("user_id") == user_id
-    }
-    
-    # 按更新时间倒序排序
-    sorted_history = [
-        {
-            "id": session_id,
-            "title": session_data.get("title", "未命名会话"),
-            "created_at": session_data.get("created_at"),
-            "updated_at": session_data.get("updated_at"),
-            "message_count": len(session_data.get("messages", [])),
-            "first_message": next((msg.get("content") for msg in session_data.get("messages", []) 
-                               if msg.get("role") == "user"), None)
-        }
-        for session_id, session_data in user_sessions.items()
-    ]
-    
-    # 按更新时间倒序排序
-    sorted_history.sort(key=lambda x: x["updated_at"], reverse=True)
-    
-    return sorted_history
+    try:
+        # 从数据库获取用户会话列表
+        sessions = session_manager.list_sessions(user_id=user_id, limit=50)
+        
+        # 获取每个会话的第一条用户消息
+        result = []
+        for session in sessions:
+            session_id = session.get('id')
+            
+            # 为每个会话查询消息数量和第一条用户消息
+            with MySQLBase().connection.cursor() as cursor:
+                # 获取消息总数
+                cursor.execute(
+                    "SELECT COUNT(*) as count FROM chat_messages WHERE session_id = %s",
+                    (session_id,)
+                )
+                count_result = cursor.fetchone()
+                message_count = count_result.get('count', 0) if count_result else 0
+                
+                # 获取第一条用户消息
+                cursor.execute(
+                    "SELECT content FROM chat_messages WHERE session_id = %s AND role = 'user' ORDER BY created_at ASC LIMIT 1",
+                    (session_id,)
+                )
+                first_message_result = cursor.fetchone()
+                first_message = first_message_result.get('content') if first_message_result else None
+            
+            result.append({
+                "id": session_id,
+                "title": session.get("title", "未命名会话"),
+                "created_at": session.get("created_at").isoformat() if session.get("created_at") else None,
+                "updated_at": session.get("updated_at").isoformat() if session.get("updated_at") else None,
+                "message_count": message_count,
+                "first_message": first_message
+            })
+        
+        return result
+    except Exception as e:
+        logger.error(f"获取聊天历史列表失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取聊天历史失败: {str(e)}")
 
 @app.get("/api/chat/history/{session_id}")
 async def get_session_history(session_id: str, request: Request):
@@ -205,14 +220,44 @@ async def get_session_history(session_id: str, request: Request):
     
     user_id = user["user_id"]
     
-    if session_id not in chat_history:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    
-    session_data = chat_history[session_id]
-    if session_data.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="无权访问此会话")
-    
-    return chat_history[session_id]
+    try:
+        # 先检查会话是否存在且属于当前用户
+        session = session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        if session.get('user_id') != user_id:
+            raise HTTPException(status_code=403, detail="无权访问此会话")
+        
+        # 从数据库获取会话历史记录
+        with MySQLBase().connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, role, content, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC",
+                (session_id,)
+            )
+            messages = cursor.fetchall()
+        
+        # 格式化消息
+        formatted_messages = [{
+            "id": msg.get('id'),
+            "role": msg.get('role'),
+            "content": msg.get('content'),
+            "timestamp": msg.get('created_at').isoformat() if msg.get('created_at') else None
+        } for msg in messages]
+        
+        return {
+            "id": session_id,
+            "title": session.get('title', "未命名会话"),
+            "created_at": session.get('created_at').isoformat() if session.get('created_at') else None,
+            "updated_at": session.get('updated_at').isoformat() if session.get('updated_at') else None,
+            "user_id": user_id,
+            "messages": formatted_messages
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取会话历史记录失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取会话历史记录失败: {str(e)}")
 
 @app.delete("/api/chat/history/{session_id}")
 async def delete_session_history(session_id: str, request: Request):
@@ -370,19 +415,63 @@ async def process_chat_request(stream_id: str, session_id: str, message: str):
                             result_display = f"从知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
                 if chunk_type == "content":
+                    full_response += chunk.get("content", "")
                     chunk["request_id"] = str(uuid.uuid4())
                     yield f"event: content\ndata: {json.dumps(chunk)}\n\n"
         
-        # 保存助手回复到历史
+        # 保存完整聊天历史到数据库
         if full_response:
-            chat_history[session_id]["messages"].append({
-                "role": "assistant",
-                "content": full_response,
-                "timestamp": datetime.now().isoformat(),
-                "sources": sources
-            })
-            # 更新会话最后修改时间
-            chat_history[session_id]["updated_at"] = datetime.now().isoformat()
+            try:
+                # 获取现有的聊天历史
+                memory_manager = agent.memory_manager
+                messages = memory_manager.get_chat_history(session_id)
+                
+                # 添加用户消息和助手回复
+                user_message_id = str(uuid.uuid4())
+                assistant_message_id = str(uuid.uuid4())
+                
+                # 确定时间戳
+                now = datetime.now()
+                user_timestamp = (now - timedelta(seconds=5)).isoformat()
+                assistant_timestamp = now.isoformat()
+                
+                # 添加用户消息
+                messages.append({
+                    "id": user_message_id,
+                    "role": "user",
+                    "content": message,
+                    "timestamp": user_timestamp
+                })
+                
+                # 添加助手回复
+                messages.append({
+                    "id": assistant_message_id,
+                    "role": "assistant",
+                    "content": full_response,
+                    "timestamp": assistant_timestamp,
+                    "sources": sources
+                })
+                
+                # 保存到数据库和Redis
+                memory_manager.save_chat_history(session_id, messages)
+                logger.info(f"聊天历史已保存到数据库: {session_id}")
+                
+                # 更新内存中的历史记录(为了兼容原有代码逻辑)
+                if session_id in chat_history:
+                    chat_history[session_id]["messages"] = messages
+                    chat_history[session_id]["updated_at"] = assistant_timestamp
+            except Exception as e:
+                logger.error(f"保存聊天历史到数据库失败: {str(e)}", exc_info=True)
+                
+                # 如果数据库保存失败，仍然保存到内存中
+                if session_id in chat_history:
+                    chat_history[session_id]["messages"].append({
+                        "role": "assistant",
+                        "content": full_response,
+                        "timestamp": datetime.now().isoformat(),
+                        "sources": sources
+                    })
+                    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
             
         # 确保完成阶段被标记
         yield f"event: complete\ndata: {json.dumps({'content': '处理完成'})}\n\n"

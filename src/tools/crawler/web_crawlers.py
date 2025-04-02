@@ -36,7 +36,7 @@ from src.model.llm_client import llm_client
 from playwright.async_api import async_playwright
 from src.tools.crawler.cloudflare_bypass import CloudflareBypass
 from src.database.vectordb.schema_manager import MilvusSchemaManager
-from src.tools.crawler.config import crawler_config
+from src.tools.crawler.crawler_config import crawler_config
 from transformers import pipeline, AutoTokenizer, AutoModelForMaskedLM
 import torch
 from src.utils.json_parser import str2Json
@@ -787,6 +787,141 @@ class WebCrawler:
             bullets='',
             wrap_text=False    
         )
+
+    async def assess_quality(self, url: str, content: str) -> Dict:
+        """
+        评估内容质量，判断是否值得保存，并同时生成内容摘要
+        
+        Args:
+            url: 内容URL
+            content: 提取的内容
+            
+        Returns:
+            Dict: 质量评估结果，包含is_quality(布尔值)、title(标题)、reason(原因)和summary(摘要)
+        """
+        logger.info(f"评估内容质量: {url}")
+        
+        # 提取标题
+        title = self._extract_title_from_url(url, content)
+        
+        # 基本质量检查
+        if not content or len(content.strip()) < 300:  # 内容太短
+            logger.info(f"内容质量不佳(太短): {url}")
+            return {
+                "is_quality": False, 
+                "title": title,
+                "reason": "内容太短或为空",
+                "summary": ""
+            }
+            
+        try:
+            # 限制内容长度避免token超限
+            max_content_chars = 3000
+            truncated_content = content[:max_content_chars] + ("..." if len(content) > max_content_chars else "")
+            
+            # 构建提示词同时评估内容质量和生成摘要
+            prompt = f"""分析以下URL和内容，执行两个任务:
+1. 评估内容质量，判断是否值得保存到知识库
+2. 生成内容的简洁摘要
+
+URL: {url}
+标题: {title}
+内容片段: 
+{truncated_content}
+
+任务1 - 质量评估标准:
+- 内容完整性(不是片段或无效内容)
+- 信息价值(包含有用的知识或见解)
+- 可靠性(来源可信，内容符合常识)
+- 内容组织(结构清晰，表达连贯)
+
+任务2 - 摘要要求:
+- 300字以内
+- 捕捉文章的核心要点和主要信息
+- 摘要应该是连贯的段落，不是要点列表
+
+只返回JSON格式:
+{{
+  "is_quality": true/false,
+  "reason": "简短说明质量评估理由",
+  "title": "提取或优化的标题",
+  "summary": "内容摘要(如果是高质量内容则详细生成，否则留空)"
+}}"""
+
+            response = await self.llm_client.generate(
+                prompt=prompt,
+                model=os.getenv("CONTENT_QUALITY_MODEL", os.getenv("DEFAULT_MODEL"))
+            )
+            
+            # 解析返回结果
+            result = str2Json(response)
+            if not result or not isinstance(result, dict):
+                logger.warning(f"质量评估返回结果无效: {response}")
+                return {
+                    "is_quality": False, 
+                    "title": title,
+                    "reason": "解析评估结果失败",
+                    "summary": ""
+                }
+                
+            # 确保必要字段存在
+            if "title" not in result or not result["title"]:
+                result["title"] = title
+            if "reason" not in result:
+                result["reason"] = "未提供评估理由"
+            if "summary" not in result:
+                result["summary"] = ""
+                
+            logger.info(f"内容质量评估结果: {result.get('is_quality', False)}, 原因: {result.get('reason', '')}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"评估内容质量时出错: {str(e)}", exc_info=True)
+            # 失败时默认为低质量
+            return {
+                "is_quality": False, 
+                "title": title,
+                "reason": f"评估过程出错: {str(e)}",
+                "summary": ""
+            }
+
+    def _extract_title_from_url(self, url: str, content: str) -> str:
+        """
+        从URL和内容中提取标题
+        
+        Args:
+            url: 页面URL
+            content: 页面内容
+            
+        Returns:
+            str: 提取的标题
+        """
+        # 尝试从Markdown内容中提取标题
+        md_title_match = re.search(r'^#\s+(.+?)$', content, re.MULTILINE)
+        if md_title_match:
+            return md_title_match.group(1).strip()
+            
+        # 尝试从URL路径中提取标题
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        
+        # 移除尾部斜杠
+        if path.endswith('/'):
+            path = path[:-1]
+            
+        # 获取URL最后一个路径段作为标题
+        if path:
+            path_segments = path.split('/')
+            last_segment = path_segments[-1]
+            
+            # 替换短横线为空格，首字母大写
+            if last_segment:
+                title = last_segment.replace('-', ' ').replace('_', ' ').title()
+                return title
+        
+        # 如果无法提取标题，返回域名+未命名内容
+        domain = parsed_url.netloc
+        return f"{domain} - 未命名内容"
 
     def _rule_based_filter(self, url, text):
         """基础规则过滤，检测明显的低质量内容"""

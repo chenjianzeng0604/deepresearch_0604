@@ -8,7 +8,8 @@ from pathlib import Path
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-LOG_DIR = "logs"
+# 修改日志目录，去掉data层级
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
 
 # 确保日志目录存在
 Path(LOG_DIR).mkdir(parents=True, exist_ok=True)

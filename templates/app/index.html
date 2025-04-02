@@ -1270,7 +1270,6 @@
             color: #6c757d;
             cursor: pointer;
             font-size: 12px;
-            padding: 2px;
             z-index: 2;
         }
         
@@ -1290,6 +1289,83 @@
         /* 消息内容容器 */
         .message-markdown-container {
             padding: 5px 0;
+        }
+        
+        /* 添加推理阶段加载样式 */
+        .reasoning-phase-loader {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: rgba(240, 248, 255, 0.6);
+            border-radius: 4px;
+            border-left: 3px solid var(--primary-light);
+            position: relative;
+        }
+        
+        .reasoning-phase-loader .loader-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            margin-right: 10px;
+            border: 2px solid var(--primary-light);
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+        }
+        
+        .reasoning-phase-label {
+            color: #555;
+            font-size: 14px;
+        }
+        
+        .reasoning-collapse-button {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            background: none;
+            border: none;
+            color: var(--primary-color);
+            cursor: pointer;
+            font-size: 12px;
+            z-index: 5;
+            padding: 2px;
+        }
+        
+        .reasoning-content {
+            max-height: 1000px;
+            overflow: hidden;
+            transition: max-height 0.3s ease-in-out;
+            padding-top: 10px;
+            display: block;
+        }
+        
+        .reasoning-content.collapsed {
+            max-height: 0;
+            padding-top: 0;
+            transition: max-height 0.3s ease-out, padding-top 0.3s ease-out;
+        }
+        
+        .reasoning-phase-loader .reasoning-header {
+            display: flex;
+            align-items: center;
+            margin-left: 20px; /* 为折叠按钮留出空间 */
+            padding: 5px 0;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .reasoning-collapse-button i.fa-chevron-right {
+            transform: rotate(-90deg);
+            transition: transform 0.3s ease;
+        }
+        
+        .reasoning-collapse-button i.fa-chevron-down {
+            transform: rotate(0deg);
+            transition: transform 0.3s ease;
         }
     </style>
 </head>
@@ -1349,7 +1425,6 @@
             <!-- 遮罩层 -->
             <div class="overlay" id="overlay"></div>
         </div>
-    </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
@@ -1618,43 +1693,76 @@
             } else {
                 // 助手消息支持Markdown渲染
                 try {
-                    contentDiv.innerHTML = marked.parse(content);
-                    
-                    // 处理代码块的语法高亮
-                    const preBlocks = contentDiv.querySelectorAll('pre');
-                    preBlocks.forEach(pre => {
-                        const codeBlock = pre.querySelector('code');
-                        if (codeBlock) {
-                            // 检测语言类
-                            const classes = codeBlock.className.split(' ');
-                            let language = 'text';
-                            
-                            for (const cls of classes) {
-                                if (cls.startsWith('language-')) {
-                                    language = cls.replace('language-', '');
-                                    break;
-                                }
+                    if (isStreaming && content === '') {
+                        // 对于流式响应，先显示一个加载指示器，而不是"开始处理您的请求..."
+                        const loaderDiv = document.createElement('div');
+                        loaderDiv.className = 'reasoning-phase-loader';
+                        
+                        // 添加折叠按钮在左上角
+                        const collapseButton = document.createElement('button');
+                        collapseButton.className = 'reasoning-collapse-button';
+                        collapseButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                        
+                        // 创建标题和内容区域
+                        const headerDiv = document.createElement('div');
+                        headerDiv.className = 'reasoning-header';
+                        headerDiv.innerHTML = '<div class="loader-spinner"></div><div class="reasoning-phase-label">推理分析中...</div>';
+                        
+                        // 内容区域用于后续添加推理内容
+                        const contentArea = document.createElement('div');
+                        contentArea.className = 'reasoning-content';
+                        contentArea.id = 'reasoning-content-' + Date.now();
+                        
+                        loaderDiv.appendChild(collapseButton);
+                        loaderDiv.appendChild(headerDiv);
+                        loaderDiv.appendChild(contentArea);
+                        contentDiv.appendChild(loaderDiv);
+                        
+                        // 添加点击折叠功能，需要在DOM中添加元素后再绑定事件
+                        collapseButton.onclick = function(e) {
+                            console.log('折叠按钮被点击');
+                            if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
                             }
-                            // 添加语言标记
-                            pre.setAttribute('data-language', language);
-                            // 代码高亮
-                            hljs.highlightElement(codeBlock);
-                        }
-                    });
+                            
+                            // 切换内容折叠状态
+                            contentArea.classList.toggle('collapsed');
+                            
+                            // 切换图标
+                            const icon = this.querySelector('i');
+                            if (contentArea.classList.contains('collapsed')) {
+                                icon.classList.remove('fa-chevron-down');
+                                icon.classList.add('fa-chevron-right');
+                            } else {
+                                icon.classList.remove('fa-chevron-right');
+                                icon.classList.add('fa-chevron-down');
+                            }
+                        };
+                    } else {
+                        // 使用默认内容区域
+                        const currentDivContent = contentDiv.innerHTML || '';
+                        contentDiv.innerHTML = currentDivContent + marked.parse(content);
+                    }
                 } catch (e) {
                     console.error('Markdown解析错误:', e);
                     contentDiv.textContent = content;
                 }
-                // 添加展开/收缩按钮
-                const toggleButton = document.createElement('button');
-                toggleButton.className = 'toggle-collapse';
-                toggleButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
-                toggleButton.addEventListener('click', function() {
-                    messageDiv.classList.toggle('collapsed');
-                });
+                
+                // 添加展开/收缩按钮 - 只对非流式响应使用
+                if (!isStreaming) {
+                    const toggleButton = document.createElement('button');
+                    toggleButton.className = 'toggle-collapse';
+                    toggleButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                    toggleButton.addEventListener('click', function() {
+                        messageDiv.classList.toggle('collapsed');
+                    });
+                    messageDiv.appendChild(toggleButton);
+                }
+                
                 messageDiv.appendChild(contentDiv);
-                messageDiv.appendChild(toggleButton);
             }
+            
             // 组装消息
             messageDiv.appendChild(timestamp);
             // 添加到消息容器
@@ -1836,11 +1944,18 @@
                             console.log(jsonData);
                             // 根据消息类型不同处理
                             if (type === 'content') {
-                                // 纯markdown内容使用专门的容器
+                                // 纯markdown内容使用专门的容器，不需要折叠功能
                                 let msgContainer = contentDiv.querySelector('.message-markdown-container');
                                 if (!msgContainer) {
                                     msgContainer = document.createElement('div');
                                     msgContainer.className = 'message-markdown-container markdown-content';
+                                    
+                                    // 先移除加载指示器（如果存在）
+                                    const loader = contentDiv.querySelector('.reasoning-phase-loader');
+                                    if (loader) {
+                                        contentDiv.removeChild(loader);
+                                    }
+                                    
                                     contentDiv.appendChild(msgContainer);
                                 }
                                 
@@ -1864,45 +1979,104 @@
                                 });
                                 
                                 // 滚动到底部
-                                if (!currentAssistantMessage.classList.contains('collapsed')) {
-                                    messagesContainer.scrollTo({
-                                        top: messagesContainer.scrollHeight,
-                                        behavior: 'smooth'
-                                    });
-                                }
+                                messagesContainer.scrollTo({
+                                    top: messagesContainer.scrollHeight,
+                                    behavior: 'smooth'
+                                });
                             } else if (type === 'research_process') {
-                                // 状态消息使用可折叠容器
-                                let statusWrapper = contentDiv.querySelector(`.status-phase-${currentPhase}`);
-                                let statusContainer;
+                                // 查找推理阶段加载器
+                                let reasoningLoader = contentDiv.querySelector('.reasoning-phase-loader');
+                                let reasoningContent;
                                 
-                                if (!statusWrapper) {
-                                    // 创建状态容器及折叠按钮
-                                    statusWrapper = document.createElement('div');
-                                    statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
+                                if (reasoningLoader) {
+                                    // 如果存在加载器，使用其内容区域
+                                    reasoningContent = reasoningLoader.querySelector('.reasoning-content');
+                                    if (!reasoningContent) {
+                                        reasoningContent = document.createElement('div');
+                                        reasoningContent.className = 'reasoning-content';
+                                        reasoningLoader.appendChild(reasoningContent);
+                                    }
                                     
-                                    // 添加折叠按钮
-                                    const collapseButton = document.createElement('button');
-                                    collapseButton.className = 'status-collapse-button';
-                                    collapseButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                                    // 更新标题，去掉加载动画
+                                    const headerDiv = reasoningLoader.querySelector('.reasoning-header');
+                                    if (headerDiv) {
+                                        headerDiv.innerHTML = '<div class="reasoning-phase-label">推理分析结果</div>';
+                                    }
                                     
-                                    statusContainer = document.createElement('div');
-                                    statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
+                                    // 确保内容区域可见 (如果之前被折叠过，现在要显示内容了)
+                                    const wasCollapsed = reasoningContent.classList.contains('collapsed');
+                                    if (wasCollapsed) {
+                                        console.log('展开之前被折叠的内容区域');
+                                        // 不自动展开，让用户决定是否要查看详细推理过程
+                                    }
                                     
-                                    // 添加点击折叠功能
-                                    collapseButton.addEventListener('click', function() {
-                                        statusContainer.classList.toggle('collapsed');
-                                        this.classList.toggle('collapsed');
-                                    });
+                                    // 创建或更新推理阶段内容
+                                    let statusWrapper = reasoningContent.querySelector(`.status-phase-${currentPhase}`);
+                                    let statusContainer;
                                     
-                                    statusWrapper.appendChild(collapseButton);
-                                    statusWrapper.appendChild(statusContainer);
-                                    contentDiv.appendChild(statusWrapper);
+                                    if (!statusWrapper) {
+                                        // 创建状态容器
+                                        statusWrapper = document.createElement('div');
+                                        statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
+                                        
+                                        statusContainer = document.createElement('div');
+                                        statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
+                                        
+                                        statusWrapper.appendChild(statusContainer);
+                                        reasoningContent.appendChild(statusWrapper);
+                                    } else {
+                                        statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
+                                    }
+                                    
+                                    if (statusContainer) {
+                                        statusContainer.innerHTML = marked.parse(contentText);
+                                        
+                                        // 处理代码高亮
+                                        statusContainer.querySelectorAll('pre code').forEach((block) => {
+                                            if (!block.classList.contains('hljs')) {
+                                                hljs.highlightElement(block);
+                                            }
+                                        });
+                                    }
                                 } else {
-                                    statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
-                                }
-                                
-                                if (statusContainer) {
-                                    statusContainer.innerHTML = marked.parse(contentText);
+                                    // 如果没有加载器，使用旧的实现
+                                    // 状态消息使用可折叠容器
+                                    let statusWrapper = contentDiv.querySelector(`.status-phase-${currentPhase}`);
+                                    let statusContainer;
+                                    
+                                    if (!statusWrapper) {
+                                        // 创建状态容器及折叠按钮
+                                        statusWrapper = document.createElement('div');
+                                        statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
+                                        
+                                        // 添加折叠按钮
+                                        const collapseButton = document.createElement('button');
+                                        collapseButton.className = 'status-collapse-button';
+                                        collapseButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
+                                        
+                                        statusContainer = document.createElement('div');
+                                        statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
+                                        
+                                        // 默认为折叠状态
+                                        statusContainer.classList.add('collapsed');
+                                        collapseButton.classList.add('collapsed');
+                                        
+                                        // 添加点击折叠功能
+                                        collapseButton.addEventListener('click', function() {
+                                            statusContainer.classList.toggle('collapsed');
+                                            this.classList.toggle('collapsed');
+                                        });
+                                        
+                                        statusWrapper.appendChild(collapseButton);
+                                        statusWrapper.appendChild(statusContainer);
+                                        contentDiv.appendChild(statusWrapper);
+                                    } else {
+                                        statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
+                                    }
+                                    
+                                    if (statusContainer) {
+                                        statusContainer.innerHTML = marked.parse(contentText);
+                                    }
                                 }
                             } else {
                                 // 使用默认内容区域
@@ -1911,24 +2085,24 @@
                             }
                         }
                     }
-                }
-                
-                // 如果是完成消息
-                if (jsonData.type === 'done') {
-                    // 关闭SSE连接
-                    if (eventSource) {
-                        eventSource.close();
-                        eventSource = null;
+                    
+                    // 如果是完成消息
+                    if (jsonData.type === 'done') {
+                        // 关闭SSE连接
+                        if (eventSource) {
+                            eventSource.close();
+                            eventSource = null;
+                        }
+                        // 保存会话ID
+                        if (jsonData.session_id) {
+                            sessionId = jsonData.session_id;
+                            sessionStorage.setItem('current_session_id', sessionId);
+                        }
+                        // 恢复输入状态
+                        enableUserInput();
                     }
-                    // 保存会话ID
-                    if (jsonData.session_id) {
-                        sessionId = jsonData.session_id;
-                        sessionStorage.setItem('current_session_id', sessionId);
-                    }
-                    // 恢复输入状态
-                    enableUserInput();
+                    return currentContent;
                 }
-                return currentContent;
             } catch (e) {
                 console.error('解析SSE消息失败:', e, data);
                 

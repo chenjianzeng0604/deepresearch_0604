@@ -1,7 +1,8 @@
-from pydantic import BaseModel
-from typing import Optional
 import os
+from typing import Optional
+from pydantic import BaseModel
 from dotenv import load_dotenv
+
 
 class LLMConfig(BaseModel):
     """LLM模型配置"""
@@ -13,27 +14,6 @@ class LLMConfig(BaseModel):
     use_tool_model: str = "qwen2.5-72b-instruct"
 
 
-class SearchConfig(BaseModel):
-    """搜索配置"""
-    api_key: Optional[str] = ""
-    search_engine: str = "google"  # 可选值: "bing", "google", "duckduckgo"
-    max_results: int = 10
-    timeout: int = 30
-
-
-class WeChatOfficialAccountConfig(BaseModel):
-    """微信公众号配置"""
-    enabled: bool = True
-    api_url: str = ""
-    app_id: str = ""
-    app_secret: str = ""
-
-
-class DistributionConfig(BaseModel):
-    """分发配置"""
-    wechat_official_account: WeChatOfficialAccountConfig = WeChatOfficialAccountConfig()
-
-
 class AppConfig(BaseModel):
     """应用全局配置"""
     debug: bool = False
@@ -41,8 +21,6 @@ class AppConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     llm: LLMConfig
-    search: SearchConfig
-    distribution: DistributionConfig
     
     @classmethod
     def from_env(cls):
@@ -62,23 +40,8 @@ class AppConfig(BaseModel):
                 temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
                 max_tokens=int(os.getenv("MAX_TOKENS", "4096")),
                 use_tool_model=os.getenv("LLM_USE_TOOL_MODEL", "qwen2.5-72b-instruct"),
-            ),
-            
-            search=SearchConfig(
-                api_key=os.getenv("GOOGLE_API_KEY", ""),
-                search_engine=os.getenv("SEARCH_ENGINE", "google"),
-                max_results=int(os.getenv("SEARCH_MAX_RESULTS", "10")),
-                timeout=int(os.getenv("SEARCH_TIMEOUT", "30")),
-            ),
-            
-            distribution=DistributionConfig(
-                wechat_official_account=WeChatOfficialAccountConfig(
-                    enabled=os.getenv("WECHAT_OA_ENABLED", "False").lower() == "true",
-                    api_url=os.getenv("WECHAT_API_URL", ""),
-                    app_id=os.getenv("WECHAT_OA_APP_ID", ""),
-                    app_secret=os.getenv("WECHAT_OA_APP_SECRET", ""),
-                )
             )
         )
+
 
 app_config = AppConfig.from_env()

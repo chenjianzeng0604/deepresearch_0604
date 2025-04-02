@@ -7,6 +7,7 @@ import asyncio
 import openai
 from src.prompts.prompt_templates import PromptTemplates
 from src.config.app_config import app_config
+import tiktoken  # 添加tiktoken用于计算token数
 
 logger = logging.getLogger(__name__)
 
@@ -15,16 +16,85 @@ class LLMClient:
     LLM客户端，封装对LLM API的调用
     """
     
-    def __init__(self, api_key: str, api_base: str = None,
-                model: str = None, temperature: float = 0.7,
-                max_tokens: int = 4096, use_tool_model: str = None):
+    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", api_base: str = None,
+                temperature: float = 0.7, max_tokens: int = 4096, use_tool_model: str = None):
         self.api_key = api_key
-        self.api_base = api_base
         self.model = model
+        self.api_base = api_base
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.use_tool_model = use_tool_model
-        self._init_client()
+        
+        # 设置OpenAI的API配置
+        openai.api_key = api_key
+        if api_base:
+            openai.base_url = api_base
+            
+        # 获取模型对应的token限制
+        self.token_limit = self._get_model_token_limit(model)
+        logger.info(f"使用模型 {model}，token限制: {self.token_limit}")
+        
+        # 初始化tokenizer
+        try:
+            self.tokenizer = tiktoken.encoding_for_model(model)
+        except:
+            # 默认使用gpt-3.5-turbo的tokenizer
+            self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+            
+    def _get_model_token_limit(self, model: str) -> int:
+        """获取模型的token限制"""
+        model_limits = {
+            "gpt-3.5-turbo": 4096,
+            "gpt-3.5-turbo-16k": 16384,
+            "gpt-4": 8192,
+            "gpt-4-32k": 32768,
+            "gpt-4-turbo": 128000,
+            "gpt-4-1106-preview": 128000,
+            "gpt-4-0125-preview": 128000,
+            "qwen-turbo": 32768,
+            "qwen-plus": 32768,
+            "qwen-max": 57344,
+            "qwen-max-longcontext": 128000
+        }
+        # 若找不到指定模型，返回保守值4096
+        return model_limits.get(model.lower(), 4096)
+    
+    def count_tokens(self, text: str) -> int:
+        """计算文本的token数量"""
+        if not text:
+            return 0
+        try:
+            return len(self.tokenizer.encode(text))
+        except Exception as e:
+            logger.warning(f"计算token数量时出错: {e}，使用估算方法")
+            # 简单估算：中文字符算2个token，其他字符算1个
+            chinese_count = sum(1 for char in text if '\u4e00' <= char <= '\u9fff')
+            return chinese_count * 2 + (len(text) - chinese_count)
+            
+    def truncate_prompt(self, prompt: str, system_message: str = None, max_tokens: int = None) -> str:
+        """截断prompt以确保不超过模型token限制"""
+        # 预留给回复的token数和系统消息的token数
+        reserved_tokens = 1024  # 为回复预留1024个token
+        system_tokens = self.count_tokens(system_message) if system_message else 0
+        
+        # 计算可用于prompt的最大token数
+        available_tokens = self.token_limit - reserved_tokens - system_tokens
+        if max_tokens and max_tokens < self.token_limit:
+            available_tokens -= max_tokens  # 如果指定了max_tokens，需要额外预留
+        
+        # 计算当前prompt的token数
+        prompt_tokens = self.count_tokens(prompt)
+        
+        # 如果prompt太长，需要截断
+        if prompt_tokens > available_tokens:
+            truncation_ratio = available_tokens / prompt_tokens
+            logger.warning(f"输入过长 ({prompt_tokens} tokens)，截断至 {available_tokens} tokens (比例: {truncation_ratio:.2f})")
+            
+            # 简单截断方法：按比例截取文本
+            truncated_length = int(len(prompt) * truncation_ratio * 0.9)  # 稍微保守一点，取90%
+            prompt = prompt[:truncated_length] + "\n\n[注：由于内容过长，部分输入已被截断]"
+            
+        return prompt
     
     def _init_client(self):
         """初始化API客户端"""
@@ -75,6 +145,9 @@ class LLMClient:
         Returns:
             str: 生成的文本
         """
+        # 截断过长的prompt
+        prompt = self.truncate_prompt(prompt, system_message, max_tokens)
+        
         # 准备消息
         messages = []
         if system_message:
@@ -161,6 +234,9 @@ class LLMClient:
         Returns:
             AsyncGenerator[str, None]: 生成的文本流
         """
+        # 截断过长的prompt
+        prompt = self.truncate_prompt(prompt, system_message, max_tokens)
+        
         # 使用默认系统消息
         if not system_message:
             system_message = PromptTemplates.get_system_message()
@@ -198,7 +274,6 @@ class LLMClient:
                 yield non_streaming_response
             except Exception as e2:
                 logger.error(f"非流式生成文本时出错: {e2}", exc_info=True)
-                yield f"生成文本时出错: {str(e2)}"  
 
 llm_client = LLMClient(api_key=app_config.llm.api_key, 
                        model=app_config.llm.model, 

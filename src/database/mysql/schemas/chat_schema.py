@@ -20,8 +20,8 @@ CHAT_SCHEMA = {
     """,
     
     # 消息表
-    "messages": """
-        CREATE TABLE IF NOT EXISTS messages (
+    "chat_messages": """
+        CREATE TABLE IF NOT EXISTS chat_messages (
             id VARCHAR(36) PRIMARY KEY,
             session_id VARCHAR(36),
             role VARCHAR(10),
