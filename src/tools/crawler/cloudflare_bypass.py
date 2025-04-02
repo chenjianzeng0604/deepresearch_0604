@@ -15,8 +15,8 @@ class CloudflareBypass:
         self.page = page
         self.captcha_api_key = os.getenv("2CAPTCHA_API_KEY")
         self.max_retries = 2
-        self.cloudflare_bypass_wait_for_timeout = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT", 5000))
-        self.cloudflare_bypass_wait_for_load_state = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_LOAD_STATE", 10000))
+        self.cloudflare_bypass_wait_for_timeout = int(os.getenv("CLOUDFLARE_BYPASS_WAIT_FOR_TIMEOUT", 1000))
+        self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 10))
 
     async def handle_cloudflare(self) -> Optional[str]:
         """
@@ -214,18 +214,13 @@ class CloudflareBypass:
             try:
                 if not await self.page.is_visible("body"):
                     logger.warning("页面可能已导航，等待页面加载")
-                    await self.page.wait_for_load_state("domcontentloaded", timeout=self.cloudflare_bypass_wait_for_load_state)
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=self.crawler_fetch_url_timeout * 1000)
                 
                 await self.page.evaluate("generateMouseMove()")
                 await self.page.wait_for_timeout(self.cloudflare_bypass_wait_for_timeout)
                 break
             except Exception as e:
                 logger.warning(f"模拟人类交互时出错 (尝试 {attempt+1}/{self.max_retries}): {str(e)}")
-                try:
-                    await self.page.reload()
-                    await self.page.wait_for_load_state("domcontentloaded", timeout=self.cloudflare_bypass_wait_for_load_state)
-                except Exception as reload_error:
-                    logger.warning(f"重新加载页面失败: {str(reload_error)}")
 
     async def _random_mouse_movement(self):
         """生成随机鼠标轨迹"""
@@ -234,7 +229,7 @@ class CloudflareBypass:
                 x = random.randint(0, 800)
                 y = random.randint(0, 600)
                 await self.page.mouse.move(x, y)
-                await self.page.wait_for_timeout(random.randint(50, 300))
+                await self.page.wait_for_timeout(random.randint(10, 50))
         except Exception as e:
             logger.warning(f"随机鼠标移动时出错: {str(e)}")
 
@@ -247,7 +242,7 @@ class CloudflareBypass:
                     0, 
                     random.randint(300, 800) * random.choice([1, -1])
                 )
-                await self.page.wait_for_timeout(random.randint(500, 1500))
+                await self.page.wait_for_timeout(random.randint(100, 200))
         except Exception as e:
             logger.warning(f"随机滚动页面时出错: {str(e)}")
             # 继续执行，不抛出异常
@@ -257,7 +252,7 @@ class CloudflareBypass:
         try:
             x = random.randint(0, 800)
             y = random.randint(0, 600)
-            await self.page.mouse.click(x, y, delay=random.randint(50, 200))
+            await self.page.mouse.click(x, y, delay=random.randint(10, 50))
         except Exception as e:
             logger.warning(f"随机点击时出错: {str(e)}")
             # 继续执行，不抛出异常

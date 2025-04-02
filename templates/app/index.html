@@ -1688,7 +1688,7 @@
                         // 保存当前HTML内容或文本
                         const currentContent = contentDiv.innerHTML || '';
                         // 追加新内容并用Markdown渲染
-                        contentDiv.innerHTML = marked.parse(currentContent + streamText);
+                        contentDiv.innerHTML = currentContent + marked.parse(streamText);
                         
                         // 处理代码块的语法高亮
                         contentDiv.querySelectorAll('pre code').forEach((block) => {
@@ -1799,7 +1799,7 @@
             });
             eventSource.addEventListener('complete', function(event) {
                 console.log('收到完成事件:', event.data);
-                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+                handleSSEComplete(event.data);
                 eventSource.close();
                 eventSource = null;
                 enableUserInput();
@@ -1843,7 +1843,33 @@
                                     msgContainer.className = 'message-markdown-container markdown-content';
                                     contentDiv.appendChild(msgContainer);
                                 }
-                                msgContainer.innerHTML = marked.parse(contentText);
+                                
+                                // 累积markdown内容
+                                if (isFirstChunk) {
+                                    // 第一个数据块，初始化内容
+                                    currentContent = contentText;
+                                } else {
+                                    // 累积内容
+                                    currentContent += contentText;
+                                }
+                                
+                                // 渲染累积的内容
+                                msgContainer.innerHTML = marked.parse(currentContent);
+                                
+                                // 处理代码高亮
+                                msgContainer.querySelectorAll('pre code').forEach((block) => {
+                                    if (!block.classList.contains('hljs')) {
+                                        hljs.highlightElement(block);
+                                    }
+                                });
+                                
+                                // 滚动到底部
+                                if (!currentAssistantMessage.classList.contains('collapsed')) {
+                                    messagesContainer.scrollTo({
+                                        top: messagesContainer.scrollHeight,
+                                        behavior: 'smooth'
+                                    });
+                                }
                             } else if (type === 'research_process') {
                                 // 状态消息使用可折叠容器
                                 let statusWrapper = contentDiv.querySelector(`.status-phase-${currentPhase}`);
@@ -1902,7 +1928,7 @@
                     // 恢复输入状态
                     enableUserInput();
                 }
-                return jsonData.content || currentContent;
+                return currentContent;
             } catch (e) {
                 console.error('解析SSE消息失败:', e, data);
                 
@@ -1910,6 +1936,24 @@
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 
                 return currentContent;
+            }
+        }
+        
+        // 处理完成事件，但不显示完成消息
+        function handleSSEComplete(data) {
+            try {
+                const jsonData = JSON.parse(data);
+                
+                // 保存会话ID
+                if (jsonData.session_id) {
+                    sessionId = jsonData.session_id;
+                    sessionStorage.setItem('current_session_id', sessionId);
+                }
+                
+                // 处理任何其他元数据，但不显示完成消息
+                console.log('处理完成事件，元数据:', jsonData);
+            } catch (e) {
+                console.error('解析完成事件失败:', e, data);
             }
         }
         

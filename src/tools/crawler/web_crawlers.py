@@ -63,7 +63,7 @@ class WebCrawler:
         }
         self.crawler_extract_pdf_timeout = int(os.getenv("CRAWLER_EXTRACT_PDF_TIMEOUT", 30))
         self.crawler_max_links_result = int(os.getenv("CRAWLER_MAX_LINKS_RESULT", 10))
-        self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 30))
+        self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 10))
         self.crawler_fetch_article_with_semaphore = int(os.getenv("CRAWLER_FETCH_ARTICLE_WITH_SEMAPHORE", 10))
         self.crawler_fetch_url_max_retries = int(os.getenv("CRAWLER_FETCH_URL_MAX_RETRIES", 2))
         self.crawler_fetch_url_retry_delay = int(os.getenv("CRAWLER_FETCH_URL_RETRY_DELAY", 2))
@@ -199,10 +199,14 @@ class WebCrawler:
                                         page_text.replace('\ufffd', '?')  # 替换非法字符
                                     )
                             if text_content:
-                                return '\n\n'.join(text_content)
+                                final_text = '\n\n'.join(text_content)
+                                is_filter = self._rule_based_filter(url, final_text)
+                                if (is_filter):
+                                    logger.info(f"命中低质量规则校验，过滤掉{url}的内容:{final_text}")
+                                    return None
+                                return final_text
         except Exception as e:
             logger.error(f"提取PDF内容出错: {url}, 错误: {str(e)}")
-        
         return None
     
     async def extract_links(self, html: str, base_url: str) -> List[str]:
@@ -681,13 +685,12 @@ class WebCrawler:
                             html = None
                     if html:
                         text = await page.inner_text("body")
-                        logger.info(f"获取到的文章内容: {text}")
-                        is_high_quality, score = quality_classifier.predict_quality(url, text)
-                        if is_high_quality:
-                            logger.info(f"获取到高质量内容 (分数: {score:.2f}): {url}")
-                            return html
-                        else:
+                        is_filter = self._rule_based_filter(url, text)
+                        if is_filter:
+                            logger.info(f"命中低质量规则校验，过滤掉{url}的内容:{text}")
                             return None
+                        else:
+                            return html
                     else:
                         return None
                 finally:
@@ -785,104 +788,6 @@ class WebCrawler:
             wrap_text=False    
         )
 
-class ContentQualityClassifier:
-    """
-    使用BERT模型对网页内容进行质量分类
-    """
-    def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.max_length = 512
-        self.quality_threshold = 0.5
-        
-        cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "local_models")
-        os.makedirs(cache_dir, exist_ok=True)
-
-        snapshot_dir_cn = os.path.join(
-            cache_dir,
-            "models--hfl--chinese-roberta-wwm-ext",
-            "snapshots",
-            os.listdir(f"{cache_dir}/models--hfl--chinese-roberta-wwm-ext/snapshots")[0]
-        )
-        logger.info(f"尝试从本地加载中文友好分类模型: {snapshot_dir_cn}")
-        self.tokenizer_cn = AutoTokenizer.from_pretrained(snapshot_dir_cn)
-        self.model_cn = AutoModelForMaskedLM.from_pretrained(snapshot_dir_cn)
-        self.model_cn.to(self.device)
-        self.model_cn.eval()
-        self.classifier_cn = pipeline(
-            "zero-shot-classification", 
-            model=self.model_cn,
-            tokenizer=self.tokenizer_cn, 
-            device=self.device,
-            max_length=self.max_length,
-            truncation=True,
-            candidate_labels=["low", "high"]
-        )
-
-        snapshot_dir_en = os.path.join(
-            cache_dir,
-            "models--FacebookAI--xlm-roberta-large",
-            "snapshots",
-            os.listdir(f"{cache_dir}/models--FacebookAI--xlm-roberta-large/snapshots")[0]
-        )
-        logger.info(f"尝试从本地加载英文友好分类模型: {snapshot_dir_en}")
-        self.tokenizer_en = AutoTokenizer.from_pretrained(snapshot_dir_en)
-        self.model_en = AutoModelForMaskedLM.from_pretrained(snapshot_dir_en)
-        self.model_en.to(self.device)
-        self.model_en.eval()
-        self.classifier_en = pipeline(
-            "zero-shot-classification", 
-            model=self.model_en,
-            tokenizer=self.tokenizer_en, 
-            device=self.device,
-            max_length=self.max_length,
-            truncation=True,
-            candidate_labels=["low", "high"]
-        )
-    
-    def _preprocess_text(self, text):
-        """预处理文本，提取有意义的内容片段"""
-        if not text:
-            return ""
-        # 移除HTML标签
-        text = re.sub(r'<[^>]+>', ' ', text)
-        # 移除多余空白字符
-        text = re.sub(r'\s+', ' ', text)
-        # 超过模型能处理的长度，进行截断
-        if len(text) > self.max_length:
-            text = text[:self.max_length]
-        return text
-    
-    def predict_quality(self, url, text):
-        """
-        预测内容质量
-        
-        Args:
-            url: 网页URL
-            text: 网页内容文本
-            
-        Returns:
-            tuple: (is_high_quality, score)
-        """
-        # 首先使用基本规则过滤
-        if self._rule_based_filter(url, text):
-            return False, 0.0
-        
-        try:
-            processed_text = self._preprocess_text(text)
-            result = self.classifier_cn(processed_text)
-            quality_score = result['scores'][result['labels'].index("high")]
-            is_high_quality = quality_score >= self.quality_threshold
-            logger.info(f"{url}中文质检结果:{is_high_quality}, 分数:{quality_score}")
-            if not is_high_quality:
-                result = self.classifier_en(processed_text)
-                quality_score = result['scores'][result['labels'].index("high")]
-                is_high_quality = quality_score >= self.quality_threshold
-                logger.info(f"{url}英文质检结果:{is_high_quality}, 分数:{quality_score}")
-            return is_high_quality, quality_score
-        except Exception as e:
-            logger.error(f"预测内容质量时出错: {str(e)}")
-            return True, 0.5
-    
     def _rule_based_filter(self, url, text):
         """基础规则过滤，检测明显的低质量内容"""
         if not text:
@@ -924,16 +829,17 @@ class ContentQualityClassifier:
             "This page checks",
             "see if it's really you",
             "not a robot",
-            "Why did this happen"
+            "Why did this happen",
+            "Loading...The system can't perform the operation now.",
+            "Try again later.",
+            "Our systems have detected unusual traffic from your computer network."
         ]
         text_lower = text.lower()
         for pattern in captcha_patterns:
-            if pattern.lower() in text_lower:
+            if pattern in text or pattern.lower() in text_lower:
                 logger.info(f"{url}检测到反爬验证页面，过滤")
                 return True
         return False
-
-quality_classifier = ContentQualityClassifier()
 
 class ArxivCrawler(WebCrawler):
     """

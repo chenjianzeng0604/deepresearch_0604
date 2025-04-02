@@ -254,10 +254,6 @@ async def chat_stream(request: Request):
         raise HTTPException(status_code=400, detail="必须提供message参数")
     
     session_id = request.query_params.get("session_id")
-    platforms_str = request.query_params.get("platforms", "web_site,github,arxiv,weibo,weixin,twitter")
-    platforms = platforms_str.split(",")
-    email = request.query_params.get("email")
-    
     user = get_current_user(request)
     if not user:
         raise HTTPException(
@@ -303,7 +299,7 @@ async def chat_stream(request: Request):
     chat_history[session_id]["updated_at"] = datetime.now().isoformat()
     
     return StreamingResponse(
-        process_chat_request(stream_id, session_id, message, platforms, email),
+        process_chat_request(stream_id, session_id, message),
         media_type="text/event-stream"
     )
 
@@ -329,14 +325,13 @@ async def abort_stream(request: Request):
         content={"status": "success", "message": "Stream aborted"}
     )
 
-async def process_chat_request(stream_id: str, session_id: str, message: str, platforms: List[str], email: str = None):
+async def process_chat_request(stream_id: str, session_id: str, message: str):
     """处理聊天请求的通用函数"""
     # 记录活动任务状态
     active_streams[stream_id] = {
         "active": True,
         "session_id": session_id,
-        "message": message,
-        "email": email
+        "message": message
     }
     
     # 获取或创建代理实例
@@ -349,7 +344,7 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
         # 发送初始状态更新
         yield f"event: status\ndata: {json.dumps({'content': '开始处理您的请求...', 'phase': 'init'})}\n\n"
         
-        async for chunk in agent.process_stream(ChatMessage(message=message, platforms=platforms)):
+        async for chunk in agent.process_stream(ChatMessage(message=message)):
             # 检查流是否已被客户端中止
             if not active_streams.get(stream_id, {}).get("active", False):
                 logger.info(f"流已被客户端中止 [stream_id={stream_id}]")
@@ -376,7 +371,7 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
                             yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
                 if chunk_type == "content":
                     chunk["request_id"] = str(uuid.uuid4())
-                    yield f"event: message\ndata: {json.dumps(chunk)}\n\n"
+                    yield f"event: content\ndata: {json.dumps(chunk)}\n\n"
         
         # 保存助手回复到历史
         if full_response:
@@ -392,22 +387,15 @@ async def process_chat_request(stream_id: str, session_id: str, message: str, pl
         # 确保完成阶段被标记
         yield f"event: complete\ndata: {json.dumps({'content': '处理完成'})}\n\n"
         
-        # 发送邮件（如果提供了邮箱地址）
-        if email:
-            try:
-                await send_email_with_results(message, full_response, email, sources)
-                yield f"event: status\ndata: {json.dumps({'content': f'📧 结果已发送至邮箱: {email}', 'phase': 'email_sent'})}\n\n"
-            except Exception as e:
-                logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
-                yield f"event: status\ndata: {json.dumps({'content': f'❌ 发送邮件失败: {str(e)}', 'phase': 'email_error'})}\n\n"
-    
+        try:
+            await send_email_with_results(message, full_response, sources)
+        except Exception as e:
+            logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
     except Exception as e:
         error_msg = f"处理请求时出错: {str(e)}"
         logger.error(error_msg, exc_info=True)
         yield f"event: error\ndata: {json.dumps({'content': error_msg})}\n\n"
-    
     finally:
-        # 清理流状态
         if stream_id in active_streams:
             active_streams[stream_id]["active"] = False
             logger.info(f"流处理完成 [stream_id={stream_id}]")
@@ -517,14 +505,9 @@ async def send_email_with_results(query: str, response: str, email: str = None, 
     """
     if not email:
         return
-    
     logger.info(f"准备发送邮件到: {email}")
-    
     try:
-        # 准备邮件主题和内容
         subject = f"深度研究结果: {query[:30]}{'...' if len(query) > 30 else ''}"
-        
-        # 添加HTML格式内容
         html_content = f"""
         <html>
         <head>
@@ -550,46 +533,19 @@ async def send_email_with_results(query: str, response: str, email: str = None, 
             <div class="response">
                 {markdown2.markdown(response)}
             </div>
-        """
-        
-        # 如果有来源信息，添加到邮件中
-        if sources and isinstance(sources, list) and len(sources) > 0:
-            html_content += """
-            <div class="sources">
-                <h2>参考来源:</h2>
-                <ul>
-            """
-            
-            for idx, source in enumerate(sources):
-                source_url = source.get("url", "#")
-                source_title = source.get("title", f"来源 {idx+1}")
-                html_content += f"""
-                <li class="source-item">
-                    <a href="{source_url}" target="_blank">{source_title}</a>
-                </li>
-                """
-            
-            html_content += """
-                </ul>
-            </div>
-            """
-        
-        html_content += """
             <p>感谢您使用深度研究助手!</p>
         </body>
         </html>
         """
         
-        # 发送邮件
         await email_sender.send_email(
-            recipient=email,
             subject=subject,
-            html_content=html_content
+            body=html_content,
+            is_html=True
         )
         
         logger.info(f"邮件已成功发送到: {email}")
         return True
-    
     except Exception as e:
         logger.error(f"发送邮件失败: {str(e)}")
         return False
