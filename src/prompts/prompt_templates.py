@@ -21,6 +21,26 @@ PROMPT_TEMPLATES = {
     你的深度总结：
     """,
     
+    # 推荐问题生成提示词
+    "RECOMMENDED_QUESTIONS_TEMPLATE": """
+    基于当前对话内容和历史记忆，生成不超过3个相关的推荐问题，这些问题应该是用户可能想要进一步提问的内容。
+
+    当前时间：{current_time}
+
+    用户最近的问题：{query}
+
+    你的回答：{response}
+
+    历史对话上下文：{context}
+
+    请生成1-3个简洁、相关且有价值的后续问题。这些问题应该：
+    1. 与当前话题高度相关
+    2. 能够引导更深入的探讨
+    3. 简短明了（每个问题不超过15个字）
+
+    以JSON数组格式输出推荐问题:
+    """,
+    
     # 信息充分性评估提示词
     "EVALUATE_INFORMATION_TEMPLATE": """
     作为智能研究助手，你的任务是评估我们目前收集的信息是否足够回答用户的查询，不够的话反思下一步如何收集信息解决用户的查询，给出包含搜索关键字的搜索URL，并且给出反思的思考过程和结论。
@@ -348,3 +368,21 @@ class PromptTemplates:
             str: 用户特征提取系统消息
         """
         return PROMPT_TEMPLATES["USER_FEATURE_EXTRACTION_SYSTEM_MESSAGE"]
+    
+    @classmethod
+    def format_recommended_questions_prompt(cls, query: str, response: str, context: str) -> str:
+        """格式化推荐问题生成提示词
+        
+        Args:
+            query: 用户最近的问题
+            response: 您的回答
+            context: 历史对话上下文
+        Returns:
+            str: 格式化后的提示词
+        """
+        return PROMPT_TEMPLATES["RECOMMENDED_QUESTIONS_TEMPLATE"].format(
+            query=query, 
+            response=response, 
+            context=context,
+            current_time=datetime.now().strftime("%Y-%m-%d")
+        )

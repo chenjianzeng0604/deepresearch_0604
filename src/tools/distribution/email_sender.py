@@ -38,20 +38,37 @@ class EmailSender:
     async def send_email(self, 
                     subject: str, 
                     body: str, 
-                    is_html: bool = True):
+                    is_html: bool = True,
+                    additional_recipients: List[str] = None):
         """发送邮件
         
         Args:
             subject: 邮件主题
             body: 邮件内容
             is_html: 是否为HTML内容
+            additional_recipients: 额外的收件人列表，除了配置文件中指定的收件人外
             
         Returns:
             bool: 是否发送成功
         """
         if not self._check_config():
             return False
-        for recipient_email in self.recipient_emails:
+        
+        # 合并默认收件人和额外收件人
+        recipients = list(self.recipient_emails)  # 创建默认收件人的副本
+        if additional_recipients:
+            for email in additional_recipients:
+                if email and isinstance(email, str) and email.strip():
+                    email = email.strip()
+                    if email not in recipients:
+                        recipients.append(email)
+        
+        if not recipients:
+            logger.warning("没有有效的收件人，无法发送邮件")
+            return False
+            
+        success = True
+        for recipient_email in recipients:
             try:
                 msg = MIMEMultipart()
                 msg["From"] = self.sender_email
@@ -71,5 +88,9 @@ class EmailSender:
                     pass  
                 else:
                     logger.error(f"邮件发送失败: {str(e)}")
+                    success = False
             except Exception as e:
                 logger.error(f"邮件发送失败: {str(e)}")
+                success = False
+        
+        return success

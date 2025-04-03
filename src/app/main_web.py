@@ -37,6 +37,7 @@ from src.database.mysql.schemas.chat_schema import CHAT_SCHEMA, init_chat_defaul
 from src.database.mysql.mysql_base import MySQLBase
 from src.utils.log_utils import setup_logging
 from src.tools.crawler.crawler_config import crawler_config_manager
+from src.session.session_manager import SessionManager
 
 # 加载环境变量
 load_dotenv()
@@ -97,6 +98,8 @@ agent_instances = {}
 email_sender = EmailSender()
 # 任务状态追踪
 active_streams = {}
+# 实例化会话管理器
+session_manager = SessionManager()
 
 # 会话历史存储
 chat_history = {}  # 格式: {session_id: {"messages": [], "created_at": timestamp, "updated_at": timestamp, "title": "", "user_id": user_id}}
@@ -351,7 +354,7 @@ async def chat_stream(request: Request):
 @app.post("/api/abort")
 async def abort_stream(request: Request):
     """
-    中止指定的SSE流
+    中止指定的SSE流并重置用户的速率限制
     """
     data = await request.json()
     stream_id = data.get("stream_id")
@@ -362,9 +365,24 @@ async def abort_stream(request: Request):
             content={"error": "Invalid stream_id"}
         )
     
+    # 获取该流对应的session_id，用于识别用户
+    session_id = active_streams[stream_id].get("session_id")
+    
     # 标记流为非活动
     active_streams[stream_id]["active"] = False
     logger.info(f"手动中止流 [stream_id={stream_id}]")
+    
+    # 释放资源：如果使用了信号量来限制请求速率，则释放该信号量
+    try:
+        # 尝试获取关联的agent实例
+        if session_id and session_id in agent_instances:
+            agent = agent_instances[session_id]
+            # 如果agent有信号量属性，则释放它
+            if hasattr(agent, 'semaphore') and agent.semaphore:
+                agent.semaphore.release()
+                logger.info(f"释放用户信号量资源 [session_id={session_id}]")
+    except Exception as e:
+        logger.error(f"释放信号量资源失败: {str(e)}")
     
     return JSONResponse(
         content={"status": "success", "message": "Stream aborted"}
@@ -383,41 +401,130 @@ async def process_chat_request(stream_id: str, session_id: str, message: str):
     agent = get_agent(session_id)
     
     full_response = ""
-    sources = []
+    recommended_questions = []
     
     try:
-        # 发送初始状态更新
-        yield f"event: status\ndata: {json.dumps({'content': '开始处理您的请求...', 'phase': 'init'})}\n\n"
+        # 开始流式响应
+        yield f"event: stream_start\ndata: {json.dumps({'event': 'stream_start'})}\n\n"
+        
+        # 解析响应
+        chunks = []
+        full_response = ""
         
         async for chunk in agent.process_stream(ChatMessage(message=message)):
             # 检查流是否已被客户端中止
             if not active_streams.get(stream_id, {}).get("active", False):
                 logger.info(f"流已被客户端中止 [stream_id={stream_id}]")
                 break
-            # 处理不同类型的chunk
-            if isinstance(chunk, dict):
-                chunk_type = chunk.get("type", "content")
+                
+            if chunk:
+                chunks.append(chunk)
+                chunk_type = chunk.get("type", "")
                 chunk_phase = chunk.get("phase", "")
                 if chunk_type == "research_process":
                     if chunk_phase == "evaluate":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"\n\n{result['thought']}"
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
+                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
                     elif chunk_phase == "web_search":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"\n\n• {result['url']}\n\n{result['title']}"
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
+                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
                     elif chunk_phase == "vector_search":
                         result = chunk.get("result", "")
                         if result:
                             result_display = f"从知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
-                            yield f"event: status\ndata: {json.dumps({'content': result_display, 'phase': chunk_phase})}\n\n"
+                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
                 if chunk_type == "content":
                     full_response += chunk.get("content", "")
                     chunk["request_id"] = str(uuid.uuid4())
+                    # 添加event字段到数据中
+                    chunk["event"] = "content"
                     yield f"event: content\ndata: {json.dumps(chunk)}\n\n"
+        
+        # 生成推荐问题
+        try:
+            # 获取历史对话上下文
+            memory_manager = agent.memory_manager
+            context = ""
+            chat_history = memory_manager.get_chat_history(session_id)
+            if chat_history:
+                # 取最近的5条消息作为上下文
+                recent_messages = chat_history[-5:] if len(chat_history) > 5 else chat_history
+                context = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in recent_messages])
+            
+            # 使用LLM生成推荐问题
+            from src.prompts.prompt_templates import PromptTemplates
+            from src.model.llm_client import get_llm_client
+            
+            # 格式化提示词
+            prompt = PromptTemplates.format_recommended_questions_prompt(
+                query=message,
+                response=full_response,
+                context=context
+            )
+            
+            # 调用LLM获取推荐问题
+            llm_client = get_llm_client()
+            result = llm_client.generate(prompt)
+            
+            # 解析JSON响应
+            import json
+            try:
+                # 处理可能的文本包装，确保只解析JSON部分
+                result_text = result.strip()
+                # 查找JSON数组的开始和结束
+                start_idx = result_text.find('[')
+                end_idx = result_text.rfind(']') + 1
+                
+                if start_idx >= 0 and end_idx > start_idx:
+                    json_str = result_text[start_idx:end_idx]
+                    recommended_questions = json.loads(json_str)
+                    # 限制为最多3个问题
+                    recommended_questions = recommended_questions[:3] if len(recommended_questions) > 3 else recommended_questions
+                    
+                    logger.info(f"成功生成推荐问题: {recommended_questions}")
+                    
+                    # 发送推荐问题
+                    yield f"event: recommended_questions\ndata: {json.dumps({'event': 'recommended_questions', 'questions': recommended_questions})}\n\n"
+            except Exception as e:
+                logger.error(f"解析推荐问题失败: {str(e)}", exc_info=True)
+        except Exception as e:
+            logger.error(f"生成推荐问题失败: {str(e)}", exc_info=True)
+        
+        # 响应结束
+        yield f"event: complete\ndata: {json.dumps({'event': 'complete', 'session_id': session_id})}\n\n"
+        
+        # 发送邮件功能
+        try:
+            # 获取用户信息
+            user_id = None
+            user_email = None
+            
+            # 从会话历史中获取用户ID
+            if session_id in chat_history and "user_id" in chat_history[session_id]:
+                user_id = chat_history[session_id].get("user_id")
+            
+            # 根据用户ID获取邮箱信息
+            if user_id:
+                # 使用数据库查询获取用户邮箱
+                from src.database.mysql.mysql_base import MySQLBase
+                
+                mysql_conn = MySQLBase()
+                user_info = mysql_conn.query_one(
+                    "SELECT email FROM users WHERE id = %s", 
+                    (user_id,)
+                )
+                
+                if user_info and "email" in user_info:
+                    user_email = user_info["email"]
+            
+            # 发送邮件，包含用户邮箱
+            await send_email_with_results(message, full_response, user_email)
+        except Exception as e:
+            logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
         
         # 保存完整聊天历史到数据库
         if full_response:
@@ -449,7 +556,7 @@ async def process_chat_request(stream_id: str, session_id: str, message: str):
                     "role": "assistant",
                     "content": full_response,
                     "timestamp": assistant_timestamp,
-                    "sources": sources
+                    "recommended_questions": recommended_questions  # 添加推荐问题到消息中
                 })
                 
                 # 保存到数据库和Redis
@@ -469,21 +576,14 @@ async def process_chat_request(stream_id: str, session_id: str, message: str):
                         "role": "assistant",
                         "content": full_response,
                         "timestamp": datetime.now().isoformat(),
-                        "sources": sources
+                        "recommended_questions": recommended_questions  # 添加推荐问题到消息中
                     })
                     chat_history[session_id]["updated_at"] = datetime.now().isoformat()
-            
-        # 确保完成阶段被标记
-        yield f"event: complete\ndata: {json.dumps({'content': '处理完成'})}\n\n"
         
-        try:
-            await send_email_with_results(message, full_response, sources)
-        except Exception as e:
-            logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
     except Exception as e:
         error_msg = f"处理请求时出错: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        yield f"event: error\ndata: {json.dumps({'content': error_msg})}\n\n"
+        yield f"event: error\ndata: {json.dumps({'event': 'error', 'message': error_msg})}\n\n"
     finally:
         if stream_id in active_streams:
             active_streams[stream_id]["active"] = False
@@ -562,19 +662,17 @@ async def chat(chat_request: ChatRequest, request: Request):
         
         # 保存助手回复到会话历史
         content = response_data.get("content", "")
-        sources = response_data.get("sources", [])
         
         if content:
             chat_history[session_id]["messages"].append({
                 "role": "assistant",
                 "content": content,
-                "timestamp": datetime.now().isoformat(),
-                "sources": sources
+                "timestamp": datetime.now().isoformat()
             })
             chat_history[session_id]["updated_at"] = datetime.now().isoformat()
         
         if email:
-            await send_email_with_results(message, content, email, sources)
+            await send_email_with_results(message, content, email)
             response_data["email_sent"] = True
         
         return response_data
@@ -582,7 +680,7 @@ async def chat(chat_request: ChatRequest, request: Request):
         logger.error(f"处理请求时出错: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-async def send_email_with_results(query: str, response: str, email: str = None, sources=None):
+async def send_email_with_results(query: str, response: str, email: str = None):
     """
     发送邮件给用户，包含研究结果
     
@@ -590,11 +688,10 @@ async def send_email_with_results(query: str, response: str, email: str = None, 
         query: 用户查询
         response: 完整响应内容
         email: 用户邮箱地址
-        sources: 引用的来源列表
     """
     if not email:
         return
-    logger.info(f"准备发送邮件到: {email}")
+    logger.info(f"准备发送邮件到: {email} 和管理员邮箱")
     try:
         subject = f"深度研究结果: {query[:30]}{'...' if len(query) > 30 else ''}"
         html_content = f"""
@@ -607,8 +704,6 @@ async def send_email_with_results(query: str, response: str, email: str = None, 
                 p {{ margin-bottom: 15px; }}
                 .query {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 25px; border-left: 4px solid #1a73e8; }}
                 .response {{ background: #ffffff; padding: 20px; border-radius: 5px; border: 1px solid #dadce0; }}
-                .sources {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dadce0; }}
-                .source-item {{ margin-bottom: 10px; }}
                 a {{ color: #1a73e8; text-decoration: none; }}
                 a:hover {{ text-decoration: underline; }}
             </style>
@@ -627,13 +722,16 @@ async def send_email_with_results(query: str, response: str, email: str = None, 
         </html>
         """
         
+        # 传递用户邮箱作为额外收件人
+        # EMAIL_RECIPIENT 环境变量已在 EmailSender 类初始化时处理，无需重复添加
         await email_sender.send_email(
             subject=subject,
             body=html_content,
-            is_html=True
+            is_html=True,
+            additional_recipients=[email]  # 用户邮箱作为额外收件人
         )
         
-        logger.info(f"邮件已成功发送到: {email}")
+        logger.info(f"邮件已成功发送到: {email} 和管理员邮箱")
         return True
     except Exception as e:
         logger.error(f"发送邮件失败: {str(e)}")

@@ -1367,6 +1367,62 @@
             transform: rotate(0deg);
             transition: transform 0.3s ease;
         }
+        
+        /* 助手消息样式 */
+        .assistant-message {
+            background-color: var(--message-assistant);
+            color: var(--text-primary);
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: var(--border-radius);
+            position: relative;
+            box-shadow: 0 2px 4px var(--shadow-color);
+            line-height: 1.6;
+        }
+        
+        /* 推荐问题样式 */
+        .recommended-questions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .recommended-question {
+            background-color: #f0f7ff;
+            color: #1a73e8;
+            border: 1px solid #d2e3fc;
+            border-radius: 16px;
+            padding: 6px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .recommended-question:hover {
+            background-color: #d2e3fc;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+        
+        .dark-mode .recommended-questions {
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .dark-mode .recommended-question {
+            background-color: #162d4a;
+            color: #8ab4f8;
+            border: 1px solid #2c4b77;
+        }
+        
+        .dark-mode .recommended-question:hover {
+            background-color: #2c4b77;
+        }
     </style>
 </head>
 <body>
@@ -1431,6 +1487,7 @@
     // 在页面顶部声明全局变量
     let eventSource = null;
     let currentAssistantMessage = null; // 跟踪当前助手消息
+    let lastCompletedMessage = null; // 跟踪最后完成的消息
     
     document.addEventListener('DOMContentLoaded', function() {
         console.log("页面初始化中...");
@@ -1671,6 +1728,10 @@
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}-message`;
             
+            // 创建唯一ID
+            const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+            messageDiv.id = messageId;
+            
             if (role === 'assistant' && !isStreaming) {
                 // 默认助手消息为收缩状态，除非是流式消息
                 messageDiv.classList.add('collapsed');
@@ -1777,26 +1838,28 @@
             console.log('处理SSE消息:', data);
             if (!data || !data.event) return;
             
-            switch (data.event) {
+            const eventType = data.event;
+            
+            switch (eventType) {
                 // 处理流式响应开始
                 case 'stream_start':
                     if (!currentAssistantMessage) {
-                        currentAssistantMessage = addMessage('', 'assistant');
+                        currentAssistantMessage = addMessage('', 'assistant', true);
                     }
                     break;
                 
                 // 处理流式文本内容
-                case 'stream_text':
+                case 'content':
                     if (currentAssistantMessage) {
                         const contentDiv = currentAssistantMessage.querySelector('.message-content');
                         if (!contentDiv) return;
                         
-                        const streamText = data.text || '';
+                        const content = data.content || '';
                         
                         // 保存当前HTML内容或文本
                         const currentContent = contentDiv.innerHTML || '';
                         // 追加新内容并用Markdown渲染
-                        contentDiv.innerHTML = currentContent + marked.parse(streamText);
+                        contentDiv.innerHTML = currentContent + marked.parse(content);
                         
                         // 处理代码块的语法高亮
                         contentDiv.querySelectorAll('pre code').forEach((block) => {
@@ -1815,27 +1878,125 @@
                     }
                     break;
                 
+                // 处理状态消息
+                case 'status':
+                    handleStatusMessage(data);
+                    break;
+                
                 // 处理流式响应结束
-                case 'stream_end':
+                case 'complete':
+                    // 保存当前消息的引用，以便在收到推荐问题时能够找到正确的消息
+                    lastCompletedMessage = currentAssistantMessage;
                     currentAssistantMessage = null;
                     enableUserInput();
                     break;
+                
+                // 处理推荐问题
+                case 'recommended_questions':
+                    if (data.questions && Array.isArray(data.questions)) {
+                        // 使用最后完成的消息而不是当前消息
+                        handleRecommendedQuestions(data.questions, lastCompletedMessage);
+                    }
+                    break;
                     
+                // 处理错误
+                case 'error':
+                    handleSSEError(data.content || '处理请求时出错');
+                    enableUserInput();
+                    break;
+                
                 default:
+                    console.log('未处理的事件类型:', eventType);
                     break;
             }
+        }
+        
+        // 处理状态消息
+        function handleStatusMessage(data) {
+            console.log('处理状态消息:', data);
+            if (!data || !data.status) return;
+            
+            const statusMessage = document.createElement('div');
+            statusMessage.className = 'message status-message';
+            statusMessage.innerHTML = `
+                <p>${data.status}</p>
+            `;
+            messagesContainer.appendChild(statusMessage);
+            messagesContainer.scrollTo({
+                top: messagesContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+        
+        // 处理推荐问题
+        function handleRecommendedQuestions(questions, targetMessage) {
+            console.log('处理推荐问题:', questions);
+            
+            if (!questions || !Array.isArray(questions) || questions.length === 0) {
+                return;
+            }
+            
+            // 如果没有目标消息，无法添加推荐问题
+            if (!targetMessage) {
+                console.log('没有目标消息，无法添加推荐问题');
+                return;
+            }
+            
+            // 查找或创建推荐问题容器
+            let recommendedQuestionsContainer = targetMessage.querySelector('.recommended-questions');
+            if (!recommendedQuestionsContainer) {
+                recommendedQuestionsContainer = document.createElement('div');
+                recommendedQuestionsContainer.className = 'recommended-questions';
+                targetMessage.appendChild(recommendedQuestionsContainer);
+            }
+            
+            // 清空容器
+            recommendedQuestionsContainer.innerHTML = '';
+            
+            // 添加推荐问题按钮
+            questions.forEach(question => {
+                if (!question) return;
+                
+                const questionButton = document.createElement('div');
+                questionButton.className = 'recommended-question';
+                questionButton.textContent = question;
+                
+                // 添加点击事件处理
+                questionButton.addEventListener('click', function() {
+                    // 将问题设置到输入框
+                    userInput.value = question;
+                    // 自动提交问题
+                    handleUserInput();
+                });
+                
+                recommendedQuestionsContainer.appendChild(questionButton);
+            });
         }
 
         // 发送按钮点击事件
         sendButton.addEventListener('click', function() {
-            handleUserInput();
+            // 检查当前按钮是否处于中止状态
+            if (sendButton.classList.contains('btn-abort')) {
+                // 执行中止操作
+                abortCurrentStream();
+            } else {
+                // 执行正常发送操作
+                handleUserInput();
+            }
         });
         
         // 按下Enter键发送消息（不需要按Shift）
         userInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                handleUserInput();
+                // 检查当前按钮是否处于中止状态
+                if (sendButton.classList.contains('btn-abort')) {
+                    // 执行中止操作
+                    abortCurrentStream();
+                } else {
+                    // 执行正常发送操作
+                    handleUserInput();
+                }
             }
         });
         
@@ -1881,53 +2042,58 @@
             }
             
             // 创建新的事件源
-            eventSource = new EventSource(`/api/chat/?${sseParams.toString()}`);
+            eventSource = new EventSource(`/api/chat?${sseParams.toString()}`);
             
             // 监听消息事件
-            let isFirstChunk = true;
-            let assistantContent = '';
+            eventSource.addEventListener('message', function(event) {
+                console.log('收到消息事件:', event.data);
+                handleSSEMessage(event.data);
+            });
             
-            // 添加对不同类型事件的监听
+            // 特定的事件类型监听
+            eventSource.addEventListener('stream_start', function(event) {
+                console.log('收到开始事件:', event.data);
+                const data = JSON.parse(event.data);
+                handleSSE(data);
+            });
+            
             eventSource.addEventListener('content', function(event) {
                 console.log('收到内容事件:', event.data);
-                assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
-                isFirstChunk = false;
+                const data = JSON.parse(event.data);
+                handleSSE(data);
             });
+            
             eventSource.addEventListener('status', function(event) {
                 console.log('收到状态事件:', event.data);
-                handleSSEMessage(event.data, assistantContent, isFirstChunk);
+                const data = JSON.parse(event.data);
+                handleSSE(data);
             });
-            eventSource.addEventListener('sources', function(event) {
-                console.log('收到来源事件:', event.data);
-                handleSSEMessage(event.data, assistantContent, isFirstChunk);
-            });
-            eventSource.addEventListener('error', function(event) {
-                console.log('收到错误事件:', event.data);
-                handleSSEMessage(event.data, assistantContent, isFirstChunk);
-            });
+            
             eventSource.addEventListener('complete', function(event) {
                 console.log('收到完成事件:', event.data);
-                handleSSEComplete(event.data);
-                eventSource.close();
-                eventSource = null;
-                enableUserInput();
+                const data = JSON.parse(event.data);
+                handleSSE(data);
             });
-            eventSource.onmessage = function(event) {
-                console.log('收到默认消息:', event.data);
-                assistantContent = handleSSEMessage(event.data, assistantContent, isFirstChunk);
-                isFirstChunk = false;
-            };
-            // 监听错误事件
-            eventSource.onerror = function(error) {
-                console.error('SSE连接错误:', error);
-                handleSSEError();
-                eventSource.close();
-                eventSource = null;
-            };
+            
+            eventSource.addEventListener('recommended_questions', function(event) {
+                console.log('收到推荐问题事件:', event.data);
+                const data = JSON.parse(event.data);
+                handleSSE(data);
+            });
+            
+            eventSource.addEventListener('error', function(event) {
+                console.log('收到错误事件:', event);
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    console.log('连接已关闭');
+                    enableUserInput();
+                } else {
+                    handleSSEError('连接中断，请刷新页面重试');
+                }
+            });
         }
         
         // 处理SSE消息
-        function handleSSEMessage(data, currentContent='', isFirstChunk=false) {
+        function handleSSEMessage(data) {
             try {
                 // 尝试解析为JSON
                 const jsonData = JSON.parse(data);
@@ -1935,181 +2101,51 @@
                 // 更新当前助手消息的内容
                 if (currentAssistantMessage) {
                     const contentDiv = currentAssistantMessage.querySelector('.message-content');
-                    if (contentDiv) {
-                        if (jsonData.content) {
-                            // 检查是否是思考过程或最终总结
-                            const type = jsonData.type || '';
-                            const contentText = jsonData.content || '';
-                            const currentPhase = jsonData.phase || '';
-                            console.log(jsonData);
-                            // 根据消息类型不同处理
-                            if (type === 'content') {
-                                // 纯markdown内容使用专门的容器，不需要折叠功能
-                                let msgContainer = contentDiv.querySelector('.message-markdown-container');
-                                if (!msgContainer) {
-                                    msgContainer = document.createElement('div');
-                                    msgContainer.className = 'message-markdown-container markdown-content';
-                                    
-                                    // 先移除加载指示器（如果存在）
-                                    const loader = contentDiv.querySelector('.reasoning-phase-loader');
-                                    if (loader) {
-                                        contentDiv.removeChild(loader);
-                                    }
-                                    
-                                    contentDiv.appendChild(msgContainer);
-                                }
-                                
-                                // 累积markdown内容
-                                if (isFirstChunk) {
-                                    // 第一个数据块，初始化内容
-                                    currentContent = contentText;
-                                } else {
-                                    // 累积内容
-                                    currentContent += contentText;
-                                }
-                                
-                                // 渲染累积的内容
-                                msgContainer.innerHTML = marked.parse(currentContent);
-                                
-                                // 处理代码高亮
-                                msgContainer.querySelectorAll('pre code').forEach((block) => {
-                                    if (!block.classList.contains('hljs')) {
-                                        hljs.highlightElement(block);
-                                    }
-                                });
-                                
-                                // 滚动到底部
-                                messagesContainer.scrollTo({
-                                    top: messagesContainer.scrollHeight,
-                                    behavior: 'smooth'
-                                });
-                            } else if (type === 'research_process') {
-                                // 查找推理阶段加载器
-                                let reasoningLoader = contentDiv.querySelector('.reasoning-phase-loader');
-                                let reasoningContent;
-                                
-                                if (reasoningLoader) {
-                                    // 如果存在加载器，使用其内容区域
-                                    reasoningContent = reasoningLoader.querySelector('.reasoning-content');
-                                    if (!reasoningContent) {
-                                        reasoningContent = document.createElement('div');
-                                        reasoningContent.className = 'reasoning-content';
-                                        reasoningLoader.appendChild(reasoningContent);
-                                    }
-                                    
-                                    // 更新标题，去掉加载动画
-                                    const headerDiv = reasoningLoader.querySelector('.reasoning-header');
-                                    if (headerDiv) {
-                                        headerDiv.innerHTML = '<div class="reasoning-phase-label">推理分析结果</div>';
-                                    }
-                                    
-                                    // 确保内容区域可见 (如果之前被折叠过，现在要显示内容了)
-                                    const wasCollapsed = reasoningContent.classList.contains('collapsed');
-                                    if (wasCollapsed) {
-                                        console.log('展开之前被折叠的内容区域');
-                                        // 不自动展开，让用户决定是否要查看详细推理过程
-                                    }
-                                    
-                                    // 创建或更新推理阶段内容
-                                    let statusWrapper = reasoningContent.querySelector(`.status-phase-${currentPhase}`);
-                                    let statusContainer;
-                                    
-                                    if (!statusWrapper) {
-                                        // 创建状态容器
-                                        statusWrapper = document.createElement('div');
-                                        statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
-                                        
-                                        statusContainer = document.createElement('div');
-                                        statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
-                                        
-                                        statusWrapper.appendChild(statusContainer);
-                                        reasoningContent.appendChild(statusWrapper);
-                                    } else {
-                                        statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
-                                    }
-                                    
-                                    if (statusContainer) {
-                                        statusContainer.innerHTML = marked.parse(contentText);
-                                        
-                                        // 处理代码高亮
-                                        statusContainer.querySelectorAll('pre code').forEach((block) => {
-                                            if (!block.classList.contains('hljs')) {
-                                                hljs.highlightElement(block);
-                                            }
-                                        });
-                                    }
-                                } else {
-                                    // 如果没有加载器，使用旧的实现
-                                    // 状态消息使用可折叠容器
-                                    let statusWrapper = contentDiv.querySelector(`.status-phase-${currentPhase}`);
-                                    let statusContainer;
-                                    
-                                    if (!statusWrapper) {
-                                        // 创建状态容器及折叠按钮
-                                        statusWrapper = document.createElement('div');
-                                        statusWrapper.className = `status-wrapper status-phase-${currentPhase}`;
-                                        
-                                        // 添加折叠按钮
-                                        const collapseButton = document.createElement('button');
-                                        collapseButton.className = 'status-collapse-button';
-                                        collapseButton.innerHTML = '<i class="fas fa-chevron-down"></i>';
-                                        
-                                        statusContainer = document.createElement('div');
-                                        statusContainer.className = `status-container status-container-${currentPhase} markdown-content`;
-                                        
-                                        // 默认为折叠状态
-                                        statusContainer.classList.add('collapsed');
-                                        collapseButton.classList.add('collapsed');
-                                        
-                                        // 添加点击折叠功能
-                                        collapseButton.addEventListener('click', function() {
-                                            statusContainer.classList.toggle('collapsed');
-                                            this.classList.toggle('collapsed');
-                                        });
-                                        
-                                        statusWrapper.appendChild(collapseButton);
-                                        statusWrapper.appendChild(statusContainer);
-                                        contentDiv.appendChild(statusWrapper);
-                                    } else {
-                                        statusContainer = statusWrapper.querySelector(`.status-container-${currentPhase}`);
-                                    }
-                                    
-                                    if (statusContainer) {
-                                        statusContainer.innerHTML = marked.parse(contentText);
-                                    }
-                                }
-                            } else {
-                                // 使用默认内容区域
-                                const currentDivContent = contentDiv.innerHTML || '';
-                                contentDiv.innerHTML = currentDivContent + marked.parse(contentText);
-                            }
-                        }
-                    }
+                    if (!contentDiv) return;
                     
-                    // 如果是完成消息
-                    if (jsonData.type === 'done') {
-                        // 关闭SSE连接
-                        if (eventSource) {
-                            eventSource.close();
-                            eventSource = null;
+                    const streamText = jsonData.text || '';
+                    
+                    // 保存当前HTML内容或文本
+                    const currentContent = contentDiv.innerHTML || '';
+                    // 追加新内容并用Markdown渲染
+                    contentDiv.innerHTML = currentContent + marked.parse(streamText);
+                    
+                    // 处理代码块的语法高亮
+                    contentDiv.querySelectorAll('pre code').forEach((block) => {
+                        if (!block.classList.contains('hljs')) {
+                            hljs.highlightElement(block);
                         }
-                        // 保存会话ID
-                        if (jsonData.session_id) {
-                            sessionId = jsonData.session_id;
-                            sessionStorage.setItem('current_session_id', sessionId);
-                        }
-                        // 恢复输入状态
-                        enableUserInput();
+                    });
+                    
+                    // 如果不是收缩状态，自动滚动到底部
+                    if (!currentAssistantMessage.classList.contains('collapsed')) {
+                        messagesContainer.scrollTo({
+                            top: messagesContainer.scrollHeight,
+                            behavior: 'smooth'
+                        });
                     }
-                    return currentContent;
+                }
+                
+                // 如果是完成消息
+                if (jsonData.type === 'done') {
+                    // 关闭SSE连接
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                    // 保存会话ID
+                    if (jsonData.session_id) {
+                        sessionId = jsonData.session_id;
+                        sessionStorage.setItem('current_session_id', sessionId);
+                    }
+                    // 恢复输入状态
+                    enableUserInput();
                 }
             } catch (e) {
                 console.error('解析SSE消息失败:', e, data);
                 
                 // 自动滚动到底部
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                
-                return currentContent;
             }
         }
         
@@ -2132,20 +2168,57 @@
         }
         
         // 处理SSE错误
-        function handleSSEError() {
+        function handleSSEError(message) {
             // 显示错误消息
             if (currentAssistantMessage) {
                 const contentDiv = currentAssistantMessage.querySelector('.message-content');
                 if (contentDiv) {
                     const errorDiv = document.createElement('div');
                     errorDiv.className = 'error-message';
-                    errorDiv.textContent = '连接中断，请刷新页面重试';
+                    errorDiv.textContent = message;
                     contentDiv.appendChild(errorDiv);
                 }
             }
             
             // 恢复输入状态
             enableUserInput();
+        }
+        
+        // 中止当前流的函数
+        function abortCurrentStream() {
+            if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
+                // 获取当前stream_id
+                const sseParams = new URL(eventSource.url).searchParams;
+                const streamId = sseParams.get('stream_id');
+                
+                if (streamId) {
+                    // 发送中止请求
+                    fetch('/api/abort', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ stream_id: streamId })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('已中止流:', data);
+                        // 关闭事件源
+                        eventSource.close();
+                        eventSource = null;
+                        // 恢复输入框状态
+                        enableUserInput();
+                    })
+                    .catch(error => {
+                        console.error('中止流出错:', error);
+                        // 即使请求失败也恢复输入框状态
+                        enableUserInput();
+                    });
+                }
+            } else {
+                // 如果没有活动的事件源，直接恢复输入框状态
+                enableUserInput();
+            }
         }
         
         // 初始化时预加载历史会话数据

@@ -39,3 +39,4 @@ class ChatResponse(BaseModel):
     message_id: str
     response: str
     sources: List[Dict[str, Any]] = []
+    recommended_questions: List[str] = []  # 推荐的后续问题列表
