@@ -61,8 +61,8 @@ class WebCrawler:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9'
         }
-        self.crawler_extract_pdf_timeout = int(os.getenv("CRAWLER_EXTRACT_PDF_TIMEOUT", 30))
-        self.crawler_max_links_result = int(os.getenv("CRAWLER_MAX_LINKS_RESULT", 10))
+        self.crawler_extract_pdf_timeout = int(os.getenv("CRAWLER_EXTRACT_PDF_TIMEOUT", 10))
+        self.crawler_max_links_result = int(os.getenv("CRAWLER_MAX_LINKS_RESULT", 6))
         self.crawler_fetch_url_timeout = int(os.getenv("CRAWLER_FETCH_URL_TIMEOUT", 10))
         self.crawler_fetch_article_with_semaphore = int(os.getenv("CRAWLER_FETCH_ARTICLE_WITH_SEMAPHORE", 10))
         self.crawler_fetch_url_max_retries = int(os.getenv("CRAWLER_FETCH_URL_MAX_RETRIES", 2))
@@ -244,30 +244,6 @@ class WebCrawler:
         except Exception as e:
             logger.error(f"parse_sub_url出错: {search_url}, 错误: {str(e)}")
             return []
-    
-    async def fetch_article_and_save2milvus(self, query: str, links: List[str], scenario: str = None) -> List[str]:
-        """
-        获取文章内容并保存到Milvus
-        
-        Args:
-            query: 搜索查询词
-            links: 链接列表
-            scenario: 场景名称，为None时使用默认场景
-            
-        Returns:
-            List[str]: 处理结果
-        """
-        if not links or len(links) == 0:
-            logger.warning(f"没有有效链接可爬取，查询：{query}")
-            return []
-        
-        links_to_fetch = await self.filterSavedUrl(links, scenario)
-        if not links_to_fetch:
-            return []
-        
-        results = await self.fetch_article(links_to_fetch)
-        await self.save_article(results, scenario)
-        return results
 
     async def filterSavedUrl(self, links, scenario: str = None):
         # 获取场景对应的Milvus集合名称
@@ -309,7 +285,7 @@ class WebCrawler:
         logger.info(f"将处理{len(links_to_fetch)}/{len(unique_links)} 个链接 (过滤掉 {len(all_existing_urls)} 个已存在链接)")
         return links_to_fetch
 
-    async def fetch_article_stream(self, links: List[str], scenario: str) -> AsyncGenerator[dict, None]:
+    async def fetch_article_stream(self, links: List[str], query: str = None) -> AsyncGenerator[dict, None]:
         """
         流式获取文章内容并保存到Milvus
         
@@ -333,29 +309,58 @@ class WebCrawler:
                         content = await self.fetch_url_md(link)
                     clean_content = content.strip() if content else ""
                     if not clean_content:
-                        return {"url": link, "content": "", "title": ""}
+                        return {
+                            "url": link, 
+                            "content": "", 
+                            "title": "", 
+                            "high_quality": False, 
+                            "reason": "内容未获取到或已被过滤", 
+                            "compress": False
+                        }
                     prompt = PromptTemplates.format_article_quality_prompt(
-                        article=clean_content, word_count=self.article_trunc_word_count)
-                    logger.info(f"文章质量评估提示词: {prompt}")
+                        article=clean_content, 
+                        query=query,
+                        word_count=self.article_trunc_word_count)
                     response = await self.llm_client.generate(
                         prompt=prompt, 
-                        system_message=PromptTemplates.get_system_message(),
                         model=os.getenv("ARTICLE_QUALITY_MODEL")
                     )
                     quality_result = str2Json(response)
-                    logger.info(f"文章质量评估结果: {quality_result}")
-                    if not quality_result or not quality_result.get("high_quality", False):
-                        return {"url": link, "content": "", "title": ""}
-                    if quality_result.get("compress"):
+                    if not quality_result:
+                        return {
+                            "url": link, 
+                            "content": "", 
+                            "title": "", 
+                            "high_quality": False, 
+                            "reason": "内容质量评估失败", 
+                            "compress": False
+                        }
+                    if not quality_result.get("high_quality", False):
+                        return {
+                            "url": link, 
+                            "content": "", 
+                            "title": "", 
+                            "high_quality": False, 
+                            "reason": quality_result.get("reason"), 
+                            "compress": False
+                        }
+                    if quality_result.get("compress"): 
                         content = quality_result.get("compressed_article")
-                    result = {"url": link, "content": content, "title": quality_result.get("title")}
-                    asyncio.create_task(self.save_article([result], scenario))
+                    result = {
+                        "url": link, 
+                        "content": content, 
+                        "title": quality_result.get("title"), 
+                        "high_quality": True, 
+                        "reason": quality_result.get("reason"), 
+                        "compress": quality_result.get("compress"),
+                    }
+                    asyncio.create_task(self.save_article([result], quality_result["scenario"]))
                     return result
             except asyncio.CancelledError:
-                logger.warning(f"任务取消: {link}")
+                logger.warning(f"任务取消: {link}", exc_info=True)
                 return {"url": link, "error": "任务取消"}
             except Exception as e:
-                logger.error(f"处理失败: {link} - {str(e)}")
+                logger.error(f"处理失败: {link} - {str(e)}", exc_info=True)
                 return {"url": link, "error": str(e)}
         max_links = min(self.crawler_max_links_result, len(links))
         tasks = [
@@ -375,60 +380,11 @@ class WebCrawler:
                 if not task.done():
                     task.cancel()
 
-    async def fetch_article(self, links: List[str]) -> List[str]:
-        """
-        获取文章内容并保存到Milvus
-        
-        Args:
-            links: 链接列表
-        Returns:
-            List[str]: 处理结果
-        """
-        if not links or len(links) == 0:
-            logger.warning(f"没有有效链接可爬取")
-            return []
-
-        sem = asyncio.Semaphore(self.crawler_fetch_article_with_semaphore)
-        async def fetch_article_with_semaphore(link):
-            try:
-                async with sem:
-                    if self.is_pdf_url(link):
-                        content = await self.extract_pdf(link)
-                        if not content or len(content.strip()) == 0:
-                            content = ""
-                        return {"url": link, "content": content}
-                    else:
-                        content = await self.fetch_url_md(link)
-                        if not content or len(content.strip()) == 0:
-                            content = ""
-                        return {"url": link, "content": content}
-            except asyncio.CancelledError:
-                logger.warning(f"获取文章任务被取消: {link}")
-                return {"url": link, "content": "", "error": "Task cancelled"}
-            except Exception as e:
-                logger.error(f"获取文章失败: {link}, 错误: {str(e)}")
-                return {"url": link, "content": "", "error": str(e)}
-        
-        links_to_process = links[:min(self.crawler_max_links_result, len(links))]
-        tasks = [fetch_article_with_semaphore(link) for link in links_to_process]
-
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return results
-        except asyncio.CancelledError:
-            logger.warning("爬取任务被取消")
-            return []
-        except Exception as e:
-            logger.error(f"获取文章信息时发生错误: {str(e)}")
-            return []
-
     async def save_article(self, results, scenario: str = None):
-        # 按批次处理和保存数据，避免单次操作过大
         batch_size = 5
         current_batch = []
         rows = 0
 
-        # 获取场景对应的Milvus集合名称
         collection_name = self.crawler_config.get_collection_name(scenario)
         if not collection_name:
             logger.warning(f"未找到场景 {scenario} 对应的Milvus集合名称")
@@ -446,33 +402,26 @@ class WebCrawler:
             if isinstance(result, Exception):
                 logger.error(f"获取文章信息时发生错误: {str(result)}")
                 continue
-            
             if not result or 'url' not in result:
                 logger.warning(f"获取的结果格式不正确: {result}")
                 continue
-                
             if 'error' in result and result['error']:
                 logger.warning(f"获取文章 {result['url']} 失败: {result['error']}")
                 continue
-                
             if not result['content'] or len(result['content'].strip()) == 0:
                 logger.warning(f"获取的文章内容为空: {result['url']}")
                 continue
-            
             try:
                 schema, index_params = MilvusSchemaManager.get_deepresearch_schema()
                 contents = self.cut_string_by_length(result['content'], self.article_trunc_word_count)
-                
                 for content in contents:
                     if not content or len(content.strip()) == 0:
                         continue
-                        
                     try:
                         content_embs = self.milvus_dao.generate_embeddings([content])
                         if not content_embs or len(content_embs) == 0:
                             logger.warning(f"为内容生成嵌入向量失败: {result['url']}")
                             continue
-                            
                         data_item = {
                             "id": str(uuid.uuid4()),
                             "url": result['url'],
@@ -481,9 +430,7 @@ class WebCrawler:
                             "content_emb": content_embs[0],
                             "create_time": int(datetime.now(timezone.utc).timestamp() * 1000)
                         }
-                        
                         current_batch.append(data_item)
-                        
                         if len(current_batch) >= batch_size:
                             try:
                                 success = await self.batch_save_to_milvus(
@@ -498,10 +445,8 @@ class WebCrawler:
                             except Exception as e:
                                 logger.error(f"写入Milvus失败: {str(e)}")
                             current_batch = []
-                    
                     except Exception as e:
                         logger.error(f"处理内容块时出错: {str(e)}")
-            
             except Exception as e:
                 logger.error(f"处理文章时出错: {result['url']}, {str(e)}")
         
@@ -787,141 +732,6 @@ class WebCrawler:
             bullets='',
             wrap_text=False    
         )
-
-    async def assess_quality(self, url: str, content: str) -> Dict:
-        """
-        评估内容质量，判断是否值得保存，并同时生成内容摘要
-        
-        Args:
-            url: 内容URL
-            content: 提取的内容
-            
-        Returns:
-            Dict: 质量评估结果，包含is_quality(布尔值)、title(标题)、reason(原因)和summary(摘要)
-        """
-        logger.info(f"评估内容质量: {url}")
-        
-        # 提取标题
-        title = self._extract_title_from_url(url, content)
-        
-        # 基本质量检查
-        if not content or len(content.strip()) < 300:  # 内容太短
-            logger.info(f"内容质量不佳(太短): {url}")
-            return {
-                "is_quality": False, 
-                "title": title,
-                "reason": "内容太短或为空",
-                "summary": ""
-            }
-            
-        try:
-            # 限制内容长度避免token超限
-            max_content_chars = 3000
-            truncated_content = content[:max_content_chars] + ("..." if len(content) > max_content_chars else "")
-            
-            # 构建提示词同时评估内容质量和生成摘要
-            prompt = f"""分析以下URL和内容，执行两个任务:
-1. 评估内容质量，判断是否值得保存到知识库
-2. 生成内容的简洁摘要
-
-URL: {url}
-标题: {title}
-内容片段: 
-{truncated_content}
-
-任务1 - 质量评估标准:
-- 内容完整性(不是片段或无效内容)
-- 信息价值(包含有用的知识或见解)
-- 可靠性(来源可信，内容符合常识)
-- 内容组织(结构清晰，表达连贯)
-
-任务2 - 摘要要求:
-- 300字以内
-- 捕捉文章的核心要点和主要信息
-- 摘要应该是连贯的段落，不是要点列表
-
-只返回JSON格式:
-{{
-  "is_quality": true/false,
-  "reason": "简短说明质量评估理由",
-  "title": "提取或优化的标题",
-  "summary": "内容摘要(如果是高质量内容则详细生成，否则留空)"
-}}"""
-
-            response = await self.llm_client.generate(
-                prompt=prompt,
-                model=os.getenv("CONTENT_QUALITY_MODEL", os.getenv("DEFAULT_MODEL"))
-            )
-            
-            # 解析返回结果
-            result = str2Json(response)
-            if not result or not isinstance(result, dict):
-                logger.warning(f"质量评估返回结果无效: {response}")
-                return {
-                    "is_quality": False, 
-                    "title": title,
-                    "reason": "解析评估结果失败",
-                    "summary": ""
-                }
-                
-            # 确保必要字段存在
-            if "title" not in result or not result["title"]:
-                result["title"] = title
-            if "reason" not in result:
-                result["reason"] = "未提供评估理由"
-            if "summary" not in result:
-                result["summary"] = ""
-                
-            logger.info(f"内容质量评估结果: {result.get('is_quality', False)}, 原因: {result.get('reason', '')}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"评估内容质量时出错: {str(e)}", exc_info=True)
-            # 失败时默认为低质量
-            return {
-                "is_quality": False, 
-                "title": title,
-                "reason": f"评估过程出错: {str(e)}",
-                "summary": ""
-            }
-
-    def _extract_title_from_url(self, url: str, content: str) -> str:
-        """
-        从URL和内容中提取标题
-        
-        Args:
-            url: 页面URL
-            content: 页面内容
-            
-        Returns:
-            str: 提取的标题
-        """
-        # 尝试从Markdown内容中提取标题
-        md_title_match = re.search(r'^#\s+(.+?)$', content, re.MULTILINE)
-        if md_title_match:
-            return md_title_match.group(1).strip()
-            
-        # 尝试从URL路径中提取标题
-        parsed_url = urlparse(url)
-        path = parsed_url.path
-        
-        # 移除尾部斜杠
-        if path.endswith('/'):
-            path = path[:-1]
-            
-        # 获取URL最后一个路径段作为标题
-        if path:
-            path_segments = path.split('/')
-            last_segment = path_segments[-1]
-            
-            # 替换短横线为空格，首字母大写
-            if last_segment:
-                title = last_segment.replace('-', ' ').replace('_', ' ').title()
-                return title
-        
-        # 如果无法提取标题，返回域名+未命名内容
-        domain = parsed_url.netloc
-        return f"{domain} - 未命名内容"
 
     def _rule_based_filter(self, url, text):
         """基础规则过滤，检测明显的低质量内容"""

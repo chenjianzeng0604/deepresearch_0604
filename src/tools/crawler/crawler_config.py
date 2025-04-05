@@ -12,13 +12,11 @@ DEFAULT_SCENARIO = "general"
 # 场景集合映射
 SCENARIO_COLLECTIONS = {
     # 通用知识类别
-    "general": "DEEPRESEARCH_GENERAL",
-    
+    "general": "deepresearch_general",
     # 技术类别
-    "technology": "DEEPRESEARCH_TECHNOLOGY",
-    
+    "technology": "deepresearch_technology",
     # 医学类别
-    "medical": "DEEPRESEARCH_MEDICAL",
+    "medical": "deepresearch_medical"
 }
 
 class CrawlerConfigManager:

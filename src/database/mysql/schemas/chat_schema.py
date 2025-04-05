@@ -20,31 +20,19 @@ CHAT_SCHEMA = {
     """,
     
     # 消息表
-    "chat_messages": """
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id VARCHAR(36) PRIMARY KEY,
+    "messages": """
+        CREATE TABLE IF NOT EXISTS messages (
+            id INT AUTO_INCREMENT PRIMARY KEY,
             session_id VARCHAR(36),
-            role VARCHAR(10),
+            role VARCHAR(20),
             content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """,
     
-    # 长期记忆表
-    "memories": """
-        CREATE TABLE IF NOT EXISTS memories (
-            id VARCHAR(36) PRIMARY KEY,
-            session_id VARCHAR(36),
-            content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )
-    """,
-    
-    # 客户端用户表
-    "client_users": """
-        CREATE TABLE IF NOT EXISTS client_users (
+    # 用户表
+    "users": """
+        CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
             phone VARCHAR(20) UNIQUE NOT NULL,
             username VARCHAR(50) NULL,
@@ -63,8 +51,8 @@ def init_chat_default_data(connection):
     """初始化聊天系统默认数据"""
     try:
         with connection.cursor() as cursor:
-            # 检查是否已有客户端用户
-            cursor.execute("SELECT COUNT(*) as count FROM client_users")
+            # 检查是否已有用户
+            cursor.execute("SELECT COUNT(*) as count FROM users")
             result = cursor.fetchone()
             
             # 如果没有用户，创建默认测试用户
@@ -72,13 +60,13 @@ def init_chat_default_data(connection):
                 password_hash = hashlib.md5("123456".encode()).hexdigest()
                 cursor.execute(
                     """
-                    INSERT INTO client_users 
+                    INSERT INTO users 
                     (phone, username, password, email, is_active) 
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                    ("13800138000", "testuser", password_hash, "test@example.com", True)
+                    ("13800138000", "admin", password_hash, "admin@example.com", True)
                 )
-                logger.info("已创建默认测试客户端用户")
+                logger.info("已创建默认测试用户")
             
         connection.commit()
     except Exception as e:

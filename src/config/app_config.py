@@ -38,7 +38,7 @@ class AppConfig(BaseModel):
                 api_base=os.getenv("LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
                 model=os.getenv("LLM_MODEL", "deepseek-r1"),
                 temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
-                max_tokens=int(os.getenv("MAX_TOKENS", "4096")),
+                max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
                 use_tool_model=os.getenv("LLM_USE_TOOL_MODEL", "qwen2.5-72b-instruct"),
             )
         )

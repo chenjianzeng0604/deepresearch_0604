@@ -7,7 +7,7 @@ import asyncio
 import openai
 from src.prompts.prompt_templates import PromptTemplates
 from src.config.app_config import app_config
-import tiktoken  # 添加tiktoken用于计算token数
+import tiktoken
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class LLMClient:
     LLM客户端，封装对LLM API的调用
     """
     
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", api_base: str = None,
+    def __init__(self, api_key: str, model: str = "deepseek-r1", api_base: str = None,
                 temperature: float = 0.7, max_tokens: int = 4096, use_tool_model: str = None):
         self.api_key = api_key
         self.model = model
@@ -24,40 +24,21 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.use_tool_model = use_tool_model
-        
-        # 设置OpenAI的API配置
-        openai.api_key = api_key
-        if api_base:
-            openai.base_url = api_base
-            
-        # 获取模型对应的token限制
+        self._init_client()
         self.token_limit = self._get_model_token_limit(model)
         logger.info(f"使用模型 {model}，token限制: {self.token_limit}")
-        
-        # 初始化tokenizer
-        try:
-            self.tokenizer = tiktoken.encoding_for_model(model)
-        except:
-            # 默认使用gpt-3.5-turbo的tokenizer
-            self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        self.tokenizer = tiktoken.get_encoding("cl100k_base")
             
     def _get_model_token_limit(self, model: str) -> int:
         """获取模型的token限制"""
         model_limits = {
-            "gpt-3.5-turbo": 4096,
-            "gpt-3.5-turbo-16k": 16384,
-            "gpt-4": 8192,
-            "gpt-4-32k": 32768,
-            "gpt-4-turbo": 128000,
-            "gpt-4-1106-preview": 128000,
-            "gpt-4-0125-preview": 128000,
-            "qwen-turbo": 32768,
-            "qwen-plus": 32768,
-            "qwen-max": 57344,
-            "qwen-max-longcontext": 128000
+            "qwen2.5-72b-instruct": 128000,
+            "qwen-turbo-latest": 1000000,
+            "tongyi-intent-detect-v3": 8000,
+            "qwq-32b": 128000,
+            "deepseek-r1": 64000
         }
-        # 若找不到指定模型，返回保守值4096
-        return model_limits.get(model.lower(), 4096)
+        return model_limits.get(model.lower(), 64000)
     
     def count_tokens(self, text: str) -> int:
         """计算文本的token数量"""
@@ -145,24 +126,12 @@ class LLMClient:
         Returns:
             str: 生成的文本
         """
-        # 截断过长的prompt
-        prompt = self.truncate_prompt(prompt, system_message, max_tokens)
-        
-        # 准备消息
         messages = []
         if system_message:
             messages.append({"role": "system", "content": system_message})
-        else:
-            # 使用默认系统消息
-            messages.append({"role": "system", "content": PromptTemplates.get_system_message()})
-        
-        # 添加用户消息
         messages.append({"role": "user", "content": prompt})
-        
-        # 重试机制
         max_retries = 2
         retry_delay = 2  # 初始等待时间（秒）
-
         if not model:
             model = self.model
         if not use_tool_model:
@@ -234,20 +203,10 @@ class LLMClient:
         Returns:
             AsyncGenerator[str, None]: 生成的文本流
         """
-        # 截断过长的prompt
-        prompt = self.truncate_prompt(prompt, system_message, max_tokens)
-        
-        # 使用默认系统消息
-        if not system_message:
-            system_message = PromptTemplates.get_system_message()
-        
-        # 准备消息
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt}
-        ]
-        
-        # 参数设置
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": prompt})
         params = {
             "model": self.model,
             "messages": messages,
@@ -255,19 +214,15 @@ class LLMClient:
             "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "stream": True
         }
-        
         try:
-            # 调用API并处理流式响应
             stream_resp = openai.chat.completions.create(**params)
-            
             for chunk in stream_resp:
-                if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
-                    content = chunk.choices[0].delta.content
-                    yield content
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if delta and delta.content:
+                        yield delta.content
         except Exception as e:
             logger.error(f"流式生成文本时出错: {e}", exc_info=True)
-            
-            # 出错时尝试使用非流式方式生成
             try:
                 logger.info("尝试使用非流式方式生成...")
                 non_streaming_response = await self.generate(prompt, max_tokens, temperature, None, system_message)

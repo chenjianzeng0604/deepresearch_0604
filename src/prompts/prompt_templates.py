@@ -1,125 +1,91 @@
 """提示词模板管理模块
 这个模块集中管理所有与LLM交互的提示词模板，便于统一维护和更新。
 """
+
+SCENARIO_DESC = """
+- general：通用信息查询，没有明确属于特定领域
+- technology：人工智能、机器学习、深度学习、大模型等科技领域
+- medical：医疗健康、生物技术、药物研发等医疗领域
+- finance：数字货币、区块链、投资理财、银行业务等金融领域
+- education：在线教育、学术研究、职业培训、教育科技等教育领域 
+- entertainment：影视音乐、游戏动漫、社交媒体、流行文化等娱乐领域
+- ecommerce：跨境电商、直播带货、数字营销、供应链管理等电商领域
+- legal：法律咨询、合规监管、知识产权、合同纠纷等法律领域
+- environment：碳中和、气候变化、可再生能源、生态保护等环境领域
+- automotive：自动驾驶、电动汽车、智能座舱、车路协同等汽车科技领域
+- agriculture：智慧农业、精准种植、农业无人机、农产品溯源等农业领域
+- energy：新型储能、智能电网、氢能源、核能技术等能源领域
+- manufacturing：工业4.0、智能工厂、3D打印、机器人自动化等制造领域
+- logistics：无人配送、智能仓储、路径优化、供应链金融等物流领域
+- aerospace：商业航天、卫星互联网、太空探索、航空材料等航天领域
+- fashion：虚拟时装、可持续时尚、智能穿戴、服装3D打印等时尚领域
+- tourism：智慧旅游、虚拟现实导览、文化遗产数字化、民宿经济等旅游领域
+- sports：电子竞技、运动科技、体育大数据、智能穿戴设备等体育领域
+- media：AIGC内容生成、虚拟主播、元宇宙社交、沉浸式体验等媒体领域
+- security：数据隐私保护、网络安全攻防、生物识别、量子加密等安全领域
+- psychology：心理健康评估、AI情感陪伴、认知行为疗法、脑机接口等心理领域
+"""
+
 # 集中管理所有提示词模板
 PROMPT_TEMPLATES = {
-    # 系统消息
-    "DEFAULT_SYSTEM_MESSAGE": "You are a helpful assistant.",
-    
     # 深度分析提示词
     "DEEP_ANALYSIS_TEMPLATE": """  
     针对用户问题，结合查到的数据和历史对话，进行深度总结。 
-    
     当前时间：{current_time}
-
     用户问题：{query}
-
     查到的数据：{summaries}
-    
-    历史对话上下文：{context}
-    
+    注意：不要重复总结，不要泛泛而谈，不要捏造事实。
     你的深度总结：
-    """,
-    
-    # 推荐问题生成提示词
-    "RECOMMENDED_QUESTIONS_TEMPLATE": """
-    基于当前对话内容和历史记忆，生成不超过3个相关的推荐问题，这些问题应该是用户可能想要进一步提问的内容。
-
-    当前时间：{current_time}
-
-    用户最近的问题：{query}
-
-    你的回答：{response}
-
-    历史对话上下文：{context}
-
-    请生成1-3个简洁、相关且有价值的后续问题。这些问题应该：
-    1. 与当前话题高度相关
-    2. 能够引导更深入的探讨
-    3. 简短明了（每个问题不超过15个字）
-
-    以JSON数组格式输出推荐问题:
     """,
     
     # 信息充分性评估提示词
     "EVALUATE_INFORMATION_TEMPLATE": """
     作为智能研究助手，你的任务是评估我们目前收集的信息是否足够回答用户的查询，不够的话反思下一步如何收集信息解决用户的查询，给出包含搜索关键字的搜索URL，并且给出反思的思考过程和结论。
-
     当前时间：{current_time}
-
     用户查询：{query}
-
     已收集的信息:
-    {context_text}
+    {article_text}
+    历史对话上下文: 
+    {context}
     
     以JSON格式输出：
-    1 enough字段：存放是否足够结果，足够值为True，不够值为False
-    2 search_url：进一步搜索URL，一个或多个的数组结构，保证搜索可用，实用主义
-    3 thought：反思的思考过程和结论，用自然语言方式输出方便用户阅读
+    1 fetch_url：当有收集到的信息时，该字段为空；当用户查询中包含URL时，提取URL，一个或多个的数组结构
+    2 enough字段：存放收集到的信息是否足够进行深度总结，足够值为True，不够值为False
+    3 search_url：当用户查询中不包含URL时，给出与用户查询相关的更进一步的搜索URL，一个或多个的数组结构，保证搜索可用，实用主义
+    4 thought：反思的思考过程和结论，使用自然语言格式，方便用户阅读
+    5 query：当用户查询很明确时，直接使用用户查询；当用户查询不明确时，结合用户查询和收集到的信息给出用户想要的查询
+    6 scenario：结合用户查询和收集到的信息给出当前研究领域，当用户查询很明确时，侧重用户查询来识别；当用户查询不明确时，可使用收集到的信息来识别，可选领域：
+        {scenario}
 
     你的评估与反思:
     """,
     
-    # 意图识别提示词
-    "INTENT_RECOGNITION_TEMPLATE": """
-    作为智能研究助手，你的任务是分析用户查询，并判断该查询最适合的研究领域。
-
-    当前时间：{current_time}
-
-    用户查询: {query}
-
-    请分析该查询内容，判断其最匹配的专业领域类别。可选的领域有：
-    - general：通用知识，包括一般性问题、日常生活、基础知识等
-    - technology：技术领域，包括编程语言、软件开发、人工智能、技术框架等
-    - medical：医学健康，包括疾病症状、治疗方法、医学常识、健康建议等
-    
-    以JSON格式输出：
-    1 category字段：存放最匹配的领域名称（仅限上述选项中的一个：general, technology, medical）
-    2 confidence字段：置信度（0-1之间的浮点数）
-    3 explanation字段：解释原因
-
-    你的分析结果:
-    """,
-    
-    # 文章质量评估提示词
+    # 文章质量处理提示词
     "ARTICLE_QUALITY_TEMPLATE": """
-    作为内容质量评估专家，请评估以下文章的质量、相关性和实用性。
+    你是智能内容处理专家，帮我对爬取到的文章内容进行内容质量评估、智能压缩和主题提炼，最终结果以json格式输出，具体规则如下：
+    1 先判断内容是否优质，将结果添加到high_quality字段(与用户查询相关且内容高质量为True、与用户查询不相关或内容低质量为False)，不优质直接结束
+    2 如果内容优质，判断字数是否超过{word_count}字需要压缩，将结果添加到compress字段(需压缩值为True、不需压缩值为False)
+    3 如果优质文章需要压缩，把文章压缩结果放到compressed_article字段，压缩需保留原文不要加入自己的总结，尽可能打满{word_count}字避免语义严重缺失
+    4 如果内容优质，提取文章主题放在title字段，内容不超过20字
+    5 如果内容优质，识别文章内容所属领域添加到scenario字段，可选领域：
+        {scenario}
+    6 不要输出json格式以外的文本
 
     当前时间：{current_time}
-
-    文章内容（约{word_count}字）:
+    用户查询：{query}
+    以下是文章内容：
     {article}
-
-    请从以下维度评估：
-    1. 内容质量 (1-10分)：信息准确性，论证逻辑，叙述清晰度
-    2. 专业程度 (1-10分)：专业术语使用，专业观点深度，行业理解水平
-    3. 信息密度 (1-10分)：有效信息的密集程度，冗余内容比例
-    4. 实用价值 (1-10分)：对读者的参考价值和实际应用价值
-    5. 时效性 (1-10分)：信息的时新程度，是否过时
-    
-    以JSON格式输出：
-    1 quality_score字段：总体质量得分（1-10分的浮点数）
-    2 dimensions字段：包含各维度得分的对象
-    3 reasoning字段：评分理由的简要说明
-    4 keep_content字段：布尔值，表示是否值得保留
-
-    你的评估:
     """,
     
     # 内容压缩统一管理提示词
     "CONTENT_COMPRESSION_TEMPLATE": """
     作为AI研究助手，您的任务是对已收集的多篇文章进行分析，根据与查询的相关性和信息价值，决定如何压缩和优化这些内容。
-    
     当前时间：{current_time}
-    
     用户查询: {query}
-    
     当前已收集的文章内容:
     {existing_content}
-    
     新文章内容:
     {new_content}
-    
     您需要:
     1. 评估每篇文章与查询的相关性
     2. 确定哪些文章需要保留，哪些可以丢弃或压缩
@@ -145,70 +111,7 @@ PROMPT_TEMPLATES = {
       ]
     }}
     ```
-    """,
-    
-    # 内容压缩系统消息
-    "CONTENT_COMPRESSION_SYSTEM_MESSAGE": """你是一个专业的内容压缩和优化助手。你的任务是高效地压缩多篇文章内容，同时保持原有的核心信息和价值。请确保输出格式严格符合JSON规范，以便系统能够正确解析。""",
-
-    # 记忆生成提示词模板
-    "MEMORY_GENERATION_TEMPLATE": """
-    作为智能记忆管理助手，你的任务是从以下对话历史中提取重要信息，生成结构化的长期记忆。
-
-    当前时间：{current_time}
-
-    对话历史：
-    {chat_history}
-
-    请提取以下内容：
-    1. 用户提到的关键主题和问题
-    2. 重要的事实性信息和知识点
-    3. 用户表达的偏好、兴趣和目标
-    4. 以前的查询和对话中已解决的问题
-
-    生成一段简洁但全面的记忆摘要，该摘要将用于未来对话中，帮助理解用户的背景和需求。摘要应包含上下文信息，但不要过于冗长。
-
-    你的记忆摘要:
-    """,
-    
-    # 记忆生成系统消息
-    "MEMORY_GENERATION_SYSTEM_MESSAGE": """你是一个专业的记忆管理助手。你的任务是从对话历史中提取关键信息，生成结构化的长期记忆。请确保记忆摘要简洁、信息丰富且便于未来检索。记忆应聚焦于用户的需求、偏好和历史交互中的重要事实。""",
-    
-    # 用户特征提取提示词模板
-    "USER_FEATURE_EXTRACTION_TEMPLATE": """
-    作为用户特征分析专家，你的任务是从以下对话历史中提取用户的特征信息。
-
-    当前时间：{current_time}
-
-    对话历史：
-    {chat_history}
-
-    请分析并提取以下用户特征：
-    1. 兴趣领域：用户表现出兴趣的主题和领域
-    2. 知识水平：用户在不同领域的专业程度
-    3. 交互风格：用户的沟通方式和偏好
-    4. 目标和需求：用户希望解决的问题和达成的目标
-    5. 语言习惯：用户常用的表达方式和词汇选择
-
-    以JSON格式输出用户特征:
-    ```
-    {
-      "features": {
-        "interests": ["兴趣1", "兴趣2", ...],
-        "knowledge_level": {
-          "领域1": "初级/中级/高级",
-          "领域2": "初级/中级/高级",
-          ...
-        },
-        "interaction_style": "描述用户的交互风格",
-        "goals": ["目标1", "目标2", ...],
-        "language_preferences": "描述用户的语言习惯"
-      }
-    }
-    ```
-    """,
-    
-    # 用户特征提取系统消息
-    "USER_FEATURE_EXTRACTION_SYSTEM_MESSAGE": """你是一个专业的用户特征分析专家。你的任务是从对话历史中提取用户的特征信息，包括兴趣、知识水平、交互风格、目标和语言习惯。请确保输出格式严格符合JSON规范，以便系统能够正确解析。"""
+    """
 }
 
 from datetime import datetime
@@ -216,16 +119,7 @@ from datetime import datetime
 class PromptTemplates:
     """提示词模板类，集中管理所有提示词"""
     @classmethod
-    def get_system_message(cls) -> str:
-        """获取系统消息
-        
-        Returns:
-            str: 系统消息
-        """
-        return PROMPT_TEMPLATES["DEFAULT_SYSTEM_MESSAGE"]
-    
-    @classmethod
-    def format_deep_analysis_prompt(cls, query: str, summaries: str, context: str = "") -> str:
+    def format_deep_analysis_prompt(cls, query: str, summaries: str) -> str:
         """格式化深度分析提示词
         
         Args:
@@ -238,35 +132,30 @@ class PromptTemplates:
         return PROMPT_TEMPLATES["DEEP_ANALYSIS_TEMPLATE"].format(
             query=query, 
             summaries=summaries, 
-            context=context,
             current_time=datetime.now().strftime("%Y-%m-%d")
         )
     
     @classmethod
-    def format_evaluate_information_prompt(cls, query: str, context_text: str) -> str:
+    def format_evaluate_information_prompt(cls, query: str, context: str, article_text: str) -> str:
         """格式化信息充分性评估提示词
         
         Args:
             query: 用户查询
-            context_text: 已收集的信息文本
+            context: 历史对话上下文
+            article_text: 已收集的文章文本
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["EVALUATE_INFORMATION_TEMPLATE"].format(query=query, context_text=context_text, current_time=datetime.now().strftime("%Y-%m-%d"))
-        
-    @classmethod
-    def format_intent_recognition_prompt(cls, query: str) -> str:
-        """格式化意图识别提示词
-        
-        Args:
-            query: 用户查询
-        Returns:
-            str: 格式化后的提示词
-        """
-        return PROMPT_TEMPLATES["INTENT_RECOGNITION_TEMPLATE"].format(query=query, current_time=datetime.now().strftime("%Y-%m-%d"))
+        return PROMPT_TEMPLATES["EVALUATE_INFORMATION_TEMPLATE"].format(
+            query=query, 
+            context=context, 
+            article_text=article_text, 
+            current_time=datetime.now().strftime("%Y-%m-%d"),
+            scenario=SCENARIO_DESC
+        )
 
     @classmethod
-    def format_article_quality_prompt(cls, article: str, word_count: int = 5000) -> str:
+    def format_article_quality_prompt(cls, article: str, word_count: int = 5000, query: str = None) -> str:
         """格式化文章质量评估提示词
         
         Args:
@@ -275,7 +164,13 @@ class PromptTemplates:
         Returns:
             str: 格式化后的提示词
         """
-        return PROMPT_TEMPLATES["ARTICLE_QUALITY_TEMPLATE"].format(article=article, word_count=word_count)
+        return PROMPT_TEMPLATES["ARTICLE_QUALITY_TEMPLATE"].format(
+            article=article, 
+            query=query,
+            word_count=word_count,
+            current_time=datetime.now().strftime("%Y-%m-%d"),
+            scenario=SCENARIO_DESC
+        )
     
     @classmethod
     def format_content_compression_prompt(cls, query: str, existing_content: str, new_content: str, token_limit: int) -> str:
@@ -293,96 +188,6 @@ class PromptTemplates:
             query=query,
             existing_content=existing_content,
             new_content=new_content,
-            token_limit=int(token_limit * 0.8)  # 80%的token限制
-        )
-    
-    @classmethod
-    def get_content_compression_system_message(cls) -> str:
-        """获取内容压缩系统消息
-        
-        Returns:
-            str: 内容压缩系统消息
-        """
-        return PROMPT_TEMPLATES["CONTENT_COMPRESSION_SYSTEM_MESSAGE"]
-        
-    @classmethod
-    def format_memory_generation_prompt(cls, chat_history):
-        """格式化记忆生成提示词
-        
-        Args:
-            chat_history: 对话历史列表
-        
-        Returns:
-            str: 格式化后的提示词
-        """
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 将对话历史格式化为文本
-        history_text = ""
-        for msg in chat_history:
-            role = "用户" if msg.get("role") == "user" else "助手"
-            history_text += f"{role}: {msg.get('content', '')}\n\n"
-        
-        return PROMPT_TEMPLATES["MEMORY_GENERATION_TEMPLATE"].format(
-            current_time=current_time,
-            chat_history=history_text
-        )
-    
-    @classmethod
-    def get_memory_generation_system_message(cls):
-        """获取记忆生成系统消息
-        
-        Returns:
-            str: 记忆生成系统消息
-        """
-        return PROMPT_TEMPLATES["MEMORY_GENERATION_SYSTEM_MESSAGE"]
-    
-    @classmethod
-    def format_user_feature_extraction_prompt(cls, chat_history):
-        """格式化用户特征提取提示词
-        
-        Args:
-            chat_history: 对话历史列表
-        
-        Returns:
-            str: 格式化后的提示词
-        """
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 将对话历史格式化为文本
-        history_text = ""
-        for msg in chat_history:
-            role = "用户" if msg.get("role") == "user" else "助手"
-            history_text += f"{role}: {msg.get('content', '')}\n\n"
-        
-        return PROMPT_TEMPLATES["USER_FEATURE_EXTRACTION_TEMPLATE"].format(
-            current_time=current_time,
-            chat_history=history_text
-        )
-    
-    @classmethod
-    def get_user_feature_extraction_system_message(cls):
-        """获取用户特征提取系统消息
-        
-        Returns:
-            str: 用户特征提取系统消息
-        """
-        return PROMPT_TEMPLATES["USER_FEATURE_EXTRACTION_SYSTEM_MESSAGE"]
-    
-    @classmethod
-    def format_recommended_questions_prompt(cls, query: str, response: str, context: str) -> str:
-        """格式化推荐问题生成提示词
-        
-        Args:
-            query: 用户最近的问题
-            response: 您的回答
-            context: 历史对话上下文
-        Returns:
-            str: 格式化后的提示词
-        """
-        return PROMPT_TEMPLATES["RECOMMENDED_QUESTIONS_TEMPLATE"].format(
-            query=query, 
-            response=response, 
-            context=context,
+            token_limit=int(token_limit * 0.8),
             current_time=datetime.now().strftime("%Y-%m-%d")
         )

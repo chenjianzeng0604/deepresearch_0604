@@ -8,7 +8,7 @@ import uuid
 import json
 import hashlib
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Depends, HTTPException, Cookie, status
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -38,6 +38,7 @@ from src.database.mysql.mysql_base import MySQLBase
 from src.utils.log_utils import setup_logging
 from src.tools.crawler.crawler_config import crawler_config_manager
 from src.session.session_manager import SessionManager
+from src.utils.json_parser import str2Json
 
 # 加载环境变量
 load_dotenv()
@@ -101,9 +102,6 @@ active_streams = {}
 # 实例化会话管理器
 session_manager = SessionManager()
 
-# 会话历史存储
-chat_history = {}  # 格式: {session_id: {"messages": [], "created_at": timestamp, "updated_at": timestamp, "title": "", "user_id": user_id}}
-
 def get_current_user(request: Request):
     """
     从JWT令牌获取当前用户信息，用于模板渲染
@@ -117,14 +115,15 @@ def get_current_user(request: Request):
     token = request.cookies.get("access_token")
     if not token:
         return None
-    
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        username = payload.get("sub")
+        username = payload.get("username")
+        phone = payload.get("phone")
         user_id = payload.get("user_id")
+        email = payload.get("email")
         if username is None or user_id is None:
             return None
-        return {"username": username, "user_id": user_id}
+        return {"username": username, "phone": phone, "user_id": user_id, "email": email}
     except jwt.PyJWTError:
         return None
 
@@ -179,7 +178,7 @@ async def get_chat_history(request: Request):
             with MySQLBase().connection.cursor() as cursor:
                 # 获取消息总数
                 cursor.execute(
-                    "SELECT COUNT(*) as count FROM chat_messages WHERE session_id = %s",
+                    "SELECT COUNT(*) as count FROM messages WHERE session_id = %s",
                     (session_id,)
                 )
                 count_result = cursor.fetchone()
@@ -187,7 +186,7 @@ async def get_chat_history(request: Request):
                 
                 # 获取第一条用户消息
                 cursor.execute(
-                    "SELECT content FROM chat_messages WHERE session_id = %s AND role = 'user' ORDER BY created_at ASC LIMIT 1",
+                    "SELECT content FROM messages WHERE session_id = %s AND role = 'user' ORDER BY created_at ASC LIMIT 1",
                     (session_id,)
                 )
                 first_message_result = cursor.fetchone()
@@ -212,7 +211,6 @@ async def get_session_history(session_id: str, request: Request):
     """
     获取特定会话的历史消息
     """
-    # 获取当前用户
     user = get_current_user(request)
     if not user:
         raise HTTPException(
@@ -220,9 +218,7 @@ async def get_session_history(session_id: str, request: Request):
             detail="请先登录",
             headers={"WWW-Authenticate": "Bearer"}
         )
-    
     user_id = user["user_id"]
-    
     try:
         # 先检查会话是否存在且属于当前用户
         session = session_manager.get_session(session_id)
@@ -235,7 +231,7 @@ async def get_session_history(session_id: str, request: Request):
         # 从数据库获取会话历史记录
         with MySQLBase().connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id, role, content, created_at FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC",
+                "SELECT id, role, content, created_at FROM messages WHERE session_id = %s ORDER BY created_at ASC",
                 (session_id,)
             )
             messages = cursor.fetchall()
@@ -262,32 +258,6 @@ async def get_session_history(session_id: str, request: Request):
         logger.error(f"获取会话历史记录失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取会话历史记录失败: {str(e)}")
 
-@app.delete("/api/chat/history/{session_id}")
-async def delete_session_history(session_id: str, request: Request):
-    """
-    删除特定会话的历史记录
-    """
-    # 获取当前用户
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="请先登录",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    user_id = user["user_id"]
-    
-    if session_id not in chat_history:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    
-    session_data = chat_history[session_id]
-    if session_data.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="无权删除此会话")
-    
-    del chat_history[session_id]
-    return {"success": True, "message": "会话已删除"}
-
 @app.get("/api/chat")
 async def chat_stream(request: Request):
     """
@@ -302,6 +272,9 @@ async def chat_stream(request: Request):
         raise HTTPException(status_code=400, detail="必须提供message参数")
     
     session_id = request.query_params.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
     user = get_current_user(request)
     if not user:
         raise HTTPException(
@@ -310,44 +283,8 @@ async def chat_stream(request: Request):
             headers={"WWW-Authenticate": "Bearer"}
         )
     
-    user_id = user["user_id"]
-    
-    # 创建新会话或获取现有会话
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    elif session_id not in chat_history:
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    else:
-        if chat_history[session_id].get("user_id") != user_id:
-            raise HTTPException(status_code=403, detail="无权访问此会话")
-    
-    chat_history[session_id]["messages"].append({
-        "role": "user",
-        "content": message,
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    if len(chat_history[session_id]["messages"]) == 1:
-        title = message[:30] + ("..." if len(message) > 30 else "")
-        chat_history[session_id]["title"] = title
-    
-    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
-    
     return StreamingResponse(
-        process_chat_request(stream_id, session_id, message),
+        process_chat_request(stream_id, user, session_id, message),
         media_type="text/event-stream"
     )
 
@@ -364,11 +301,8 @@ async def abort_stream(request: Request):
             status_code=400,
             content={"error": "Invalid stream_id"}
         )
-    
-    # 获取该流对应的session_id，用于识别用户
+
     session_id = active_streams[stream_id].get("session_id")
-    
-    # 标记流为非活动
     active_streams[stream_id]["active"] = False
     logger.info(f"手动中止流 [stream_id={stream_id}]")
     
@@ -388,198 +322,33 @@ async def abort_stream(request: Request):
         content={"status": "success", "message": "Stream aborted"}
     )
 
-async def process_chat_request(stream_id: str, session_id: str, message: str):
+async def process_chat_request(stream_id: str, user: Dict[str, Any], session_id: str, message: str):
     """处理聊天请求的通用函数"""
-    # 记录活动任务状态
     active_streams[stream_id] = {
         "active": True,
         "session_id": session_id,
         "message": message
     }
-    
-    # 获取或创建代理实例
     agent = get_agent(session_id)
-    
     full_response = ""
-    recommended_questions = []
-    
     try:
-        # 开始流式响应
-        yield f"event: stream_start\ndata: {json.dumps({'event': 'stream_start'})}\n\n"
-        
-        # 解析响应
-        chunks = []
-        full_response = ""
-        
         async for chunk in agent.process_stream(ChatMessage(message=message)):
-            # 检查流是否已被客户端中止
             if not active_streams.get(stream_id, {}).get("active", False):
                 logger.info(f"流已被客户端中止 [stream_id={stream_id}]")
                 break
                 
             if chunk:
-                chunks.append(chunk)
                 chunk_type = chunk.get("type", "")
-                chunk_phase = chunk.get("phase", "")
                 if chunk_type == "research_process":
-                    if chunk_phase == "evaluate":
-                        result = chunk.get("result", "")
-                        if result:
-                            result_display = f"\n\n{result['thought']}"
-                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
-                    elif chunk_phase == "web_search":
-                        result = chunk.get("result", "")
-                        if result:
-                            result_display = f"\n\n• {result['url']}\n\n{result['title']}"
-                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
-                    elif chunk_phase == "vector_search":
-                        result = chunk.get("result", "")
-                        if result:
-                            result_display = f"从知识库检索到：\n\n" + "\n\n".join([f"• {item['url']}\n\n{item['title']}" for item in result])
-                            yield f"event: status\ndata: {json.dumps({'event': 'status', 'status': result_display, 'phase': chunk_phase})}\n\n"
+                    yield f"event: status\ndata: {json.dumps(chunk)}\n\n"
                 if chunk_type == "content":
                     full_response += chunk.get("content", "")
-                    chunk["request_id"] = str(uuid.uuid4())
-                    # 添加event字段到数据中
-                    chunk["event"] = "content"
                     yield f"event: content\ndata: {json.dumps(chunk)}\n\n"
-        
-        # 生成推荐问题
+        yield f"event: complete\ndata: {json.dumps({'type': 'complete', 'content': session_id})}\n\n"
         try:
-            # 获取历史对话上下文
-            memory_manager = agent.memory_manager
-            context = ""
-            chat_history = memory_manager.get_chat_history(session_id)
-            if chat_history:
-                # 取最近的5条消息作为上下文
-                recent_messages = chat_history[-5:] if len(chat_history) > 5 else chat_history
-                context = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in recent_messages])
-            
-            # 使用LLM生成推荐问题
-            from src.prompts.prompt_templates import PromptTemplates
-            from src.model.llm_client import get_llm_client
-            
-            # 格式化提示词
-            prompt = PromptTemplates.format_recommended_questions_prompt(
-                query=message,
-                response=full_response,
-                context=context
-            )
-            
-            # 调用LLM获取推荐问题
-            llm_client = get_llm_client()
-            result = llm_client.generate(prompt)
-            
-            # 解析JSON响应
-            import json
-            try:
-                # 处理可能的文本包装，确保只解析JSON部分
-                result_text = result.strip()
-                # 查找JSON数组的开始和结束
-                start_idx = result_text.find('[')
-                end_idx = result_text.rfind(']') + 1
-                
-                if start_idx >= 0 and end_idx > start_idx:
-                    json_str = result_text[start_idx:end_idx]
-                    recommended_questions = json.loads(json_str)
-                    # 限制为最多3个问题
-                    recommended_questions = recommended_questions[:3] if len(recommended_questions) > 3 else recommended_questions
-                    
-                    logger.info(f"成功生成推荐问题: {recommended_questions}")
-                    
-                    # 发送推荐问题
-                    yield f"event: recommended_questions\ndata: {json.dumps({'event': 'recommended_questions', 'questions': recommended_questions})}\n\n"
-            except Exception as e:
-                logger.error(f"解析推荐问题失败: {str(e)}", exc_info=True)
-        except Exception as e:
-            logger.error(f"生成推荐问题失败: {str(e)}", exc_info=True)
-        
-        # 响应结束
-        yield f"event: complete\ndata: {json.dumps({'event': 'complete', 'session_id': session_id})}\n\n"
-        
-        # 发送邮件功能
-        try:
-            # 获取用户信息
-            user_id = None
-            user_email = None
-            
-            # 从会话历史中获取用户ID
-            if session_id in chat_history and "user_id" in chat_history[session_id]:
-                user_id = chat_history[session_id].get("user_id")
-            
-            # 根据用户ID获取邮箱信息
-            if user_id:
-                # 使用数据库查询获取用户邮箱
-                from src.database.mysql.mysql_base import MySQLBase
-                
-                mysql_conn = MySQLBase()
-                user_info = mysql_conn.query_one(
-                    "SELECT email FROM users WHERE id = %s", 
-                    (user_id,)
-                )
-                
-                if user_info and "email" in user_info:
-                    user_email = user_info["email"]
-            
-            # 发送邮件，包含用户邮箱
-            await send_email_with_results(message, full_response, user_email)
+            await send_email_with_results(message, full_response, user.get("email"))
         except Exception as e:
             logger.error(f"发送邮件失败: {str(e)}", exc_info=True)
-        
-        # 保存完整聊天历史到数据库
-        if full_response:
-            try:
-                # 获取现有的聊天历史
-                memory_manager = agent.memory_manager
-                messages = memory_manager.get_chat_history(session_id)
-                
-                # 添加用户消息和助手回复
-                user_message_id = str(uuid.uuid4())
-                assistant_message_id = str(uuid.uuid4())
-                
-                # 确定时间戳
-                now = datetime.now()
-                user_timestamp = (now - timedelta(seconds=5)).isoformat()
-                assistant_timestamp = now.isoformat()
-                
-                # 添加用户消息
-                messages.append({
-                    "id": user_message_id,
-                    "role": "user",
-                    "content": message,
-                    "timestamp": user_timestamp
-                })
-                
-                # 添加助手回复
-                messages.append({
-                    "id": assistant_message_id,
-                    "role": "assistant",
-                    "content": full_response,
-                    "timestamp": assistant_timestamp,
-                    "recommended_questions": recommended_questions  # 添加推荐问题到消息中
-                })
-                
-                # 保存到数据库和Redis
-                memory_manager.save_chat_history(session_id, messages)
-                logger.info(f"聊天历史已保存到数据库: {session_id}")
-                
-                # 更新内存中的历史记录(为了兼容原有代码逻辑)
-                if session_id in chat_history:
-                    chat_history[session_id]["messages"] = messages
-                    chat_history[session_id]["updated_at"] = assistant_timestamp
-            except Exception as e:
-                logger.error(f"保存聊天历史到数据库失败: {str(e)}", exc_info=True)
-                
-                # 如果数据库保存失败，仍然保存到内存中
-                if session_id in chat_history:
-                    chat_history[session_id]["messages"].append({
-                        "role": "assistant",
-                        "content": full_response,
-                        "timestamp": datetime.now().isoformat(),
-                        "recommended_questions": recommended_questions  # 添加推荐问题到消息中
-                    })
-                    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
-        
     except Exception as e:
         error_msg = f"处理请求时出错: {str(e)}"
         logger.error(error_msg, exc_info=True)
@@ -588,97 +357,6 @@ async def process_chat_request(stream_id: str, session_id: str, message: str):
         if stream_id in active_streams:
             active_streams[stream_id]["active"] = False
             logger.info(f"流处理完成 [stream_id={stream_id}]")
-
-@app.post("/api/chat")
-async def chat(chat_request: ChatRequest, request: Request):
-    """
-    聊天接口
-    
-    Args:
-        chat_request: 聊天请求数据
-        request: FastAPI请求对象
-    
-    Returns:
-        Dict: 聊天响应，包含消息内容、会话ID等
-    """
-    # 检查用户是否已登录
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="请先登录",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    message = chat_request.message
-    session_id = chat_request.session_id
-    platforms = chat_request.platforms
-    email = chat_request.email
-    user_id = user["user_id"]
-    
-    # 创建新会话或获取现有会话
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    elif session_id not in chat_history:
-        chat_history[session_id] = {
-            "messages": [],
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "title": "",
-            "user_id": user_id
-        }
-    else:
-        # 验证会话所有权
-        if chat_history[session_id].get("user_id") != user_id:
-            raise HTTPException(status_code=403, detail="无权访问此会话")
-    
-    # 保存用户消息到历史
-    chat_history[session_id]["messages"].append({
-        "role": "user",
-        "content": message,
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    # 如果是首次消息，使用它作为会话标题
-    if len(chat_history[session_id]["messages"]) == 1:
-        # 截取前30个字符作为标题
-        title = message[:30] + ("..." if len(message) > 30 else "")
-        chat_history[session_id]["title"] = title
-    
-    # 更新会话最后修改时间
-    chat_history[session_id]["updated_at"] = datetime.now().isoformat()
-    
-    # 创建代理和获取回复
-    agent = get_agent(session_id)
-    try:
-        response_data = await agent.process(ChatMessage(message=message, platforms=platforms))
-        
-        # 保存助手回复到会话历史
-        content = response_data.get("content", "")
-        
-        if content:
-            chat_history[session_id]["messages"].append({
-                "role": "assistant",
-                "content": content,
-                "timestamp": datetime.now().isoformat()
-            })
-            chat_history[session_id]["updated_at"] = datetime.now().isoformat()
-        
-        if email:
-            await send_email_with_results(message, content, email)
-            response_data["email_sent"] = True
-        
-        return response_data
-    except Exception as e:
-        logger.error(f"处理请求时出错: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
 
 async def send_email_with_results(query: str, response: str, email: str = None):
     """

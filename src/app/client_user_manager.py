@@ -7,7 +7,7 @@ from typing import Optional, Dict, List
 from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from pathlib import Path
 import sys
@@ -77,7 +77,7 @@ class ClientUserManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM client_users WHERE id = %s",
+                    "SELECT * FROM users WHERE id = %s",
                     (user_id,)
                 )
                 return cursor.fetchone()
@@ -98,7 +98,7 @@ class ClientUserManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM client_users WHERE phone = %s",
+                    "SELECT * FROM users WHERE phone = %s",
                     (phone,)
                 )
                 return cursor.fetchone()
@@ -119,7 +119,7 @@ class ClientUserManager:
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM client_users WHERE username = %s",
+                    "SELECT * FROM users WHERE username = %s",
                     (username,)
                 )
                 return cursor.fetchone()
@@ -143,7 +143,7 @@ class ClientUserManager:
             
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id FROM client_users WHERE username = %s AND password = %s AND is_active = TRUE",
+                    "SELECT id FROM users WHERE username = %s AND password = %s AND is_active = TRUE",
                     (username, password_hash)
                 )
                 user = cursor.fetchone()
@@ -151,7 +151,7 @@ class ClientUserManager:
                 if user:
                     # 更新最后登录时间
                     cursor.execute(
-                        "UPDATE client_users SET last_login = NOW() WHERE id = %s",
+                        "UPDATE users SET last_login = NOW() WHERE id = %s",
                         (user['id'],)
                     )
                     self.connection.commit()
@@ -191,7 +191,7 @@ class ClientUserManager:
             with self.connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO client_users 
+                    INSERT INTO users 
                     (phone, username, password, email, is_active) 
                     VALUES (%s, %s, %s, %s, %s)
                     """,
@@ -255,7 +255,7 @@ class ClientUserManager:
             
             # 执行更新
             with self.connection.cursor() as cursor:
-                query = f"UPDATE client_users SET {', '.join(update_fields)} WHERE id = %s"
+                query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
                 cursor.execute(query, params)
                 self.connection.commit()
                 
@@ -278,14 +278,14 @@ class ClientUserManager:
         try:
             # 检查用户是否存在
             with self.connection.cursor() as cursor:
-                check_query = "SELECT id FROM client_users WHERE id = %s"
+                check_query = "SELECT id FROM users WHERE id = %s"
                 cursor.execute(check_query, (user_id,))
                 if not cursor.fetchone():
                     logger.warning(f"删除失败：用户ID {user_id} 不存在")
                     return False
                 
                 # 执行删除操作
-                query = "DELETE FROM client_users WHERE id = %s"
+                query = "DELETE FROM users WHERE id = %s"
                 cursor.execute(query, (user_id,))
                 self.connection.commit()
                 
@@ -312,7 +312,7 @@ class ClientUserManager:
             
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE client_users SET password = %s WHERE id = %s",
+                    "UPDATE users SET password = %s WHERE id = %s",
                     (password_hash, user_id)
                 )
                 self.connection.commit()
@@ -346,7 +346,7 @@ class ClientUserManager:
             
             with self.connection.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE client_users SET password = %s WHERE phone = %s",
+                    "UPDATE users SET password = %s WHERE phone = %s",
                     (password_hash, phone)
                 )
                 self.connection.commit()
@@ -366,7 +366,7 @@ class ClientUserManager:
         """
         try:
             with self.connection.cursor() as cursor:
-                query = "SELECT * FROM client_users ORDER BY id"
+                query = "SELECT * FROM users ORDER BY id"
                 cursor.execute(query)
                 return cursor.fetchall()
         except Exception as e:
@@ -503,7 +503,7 @@ async def login(user_data: UserLogin, client_manager: ClientUserManager = Depend
         
         # 生成JWT令牌
         access_token = client_manager.create_access_token(
-            data={"sub": user["username"] or user["phone"], "user_id": user["id"]}
+            data={"username": user["username"], "phone": user["phone"], "user_id": user["id"], "email": user["email"]}
         )
         # 设置cookie
         response = JSONResponse(content={"success": True, "message": "登录成功"})
@@ -576,12 +576,14 @@ async def register(user_data: UserRegister, client_manager: ClientUserManager = 
 @client_auth_router.post("/logout")
 async def logout():
     """
-    客户端用户登出
+    客户端用户登出并重定向到登录页面
     
     Returns:
-        JSONResponse: 登出结果
+        RedirectResponse: 重定向到登录页面
     """
-    response = JSONResponse(content={"success": True, "message": "登出成功"})
+    # 创建重定向响应
+    response = RedirectResponse(url="/login", status_code=303)
+    # 删除认证cookie
     response.delete_cookie(key="access_token")
     return response
 
@@ -646,7 +648,7 @@ async def get_current_user_info(request: Request, client_manager: ClientUserMana
         # 验证token
         try:
             payload = jwt.decode(token, client_manager.SECRET_KEY, algorithms=["HS256"])
-            username = payload.get("sub")
+            username = payload.get("username")
             user_id = payload.get("user_id")
             
             if not username or not user_id:

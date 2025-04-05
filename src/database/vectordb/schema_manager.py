@@ -18,7 +18,7 @@ class MilvusSchemaManager:
         获取深度研究集合的 schema 定义，支持不同场景
         
         Args:
-            scenario: 场景名称，如 'ai', 'finance' 等
+            scenario: 场景名称，如 'ai' 等
             
         Returns:
             tuple: (schema, index_params) - schema 和索引参数
